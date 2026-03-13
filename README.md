@@ -31,20 +31,6 @@
 
 这两个变量主要用于测试或临时调试。
 
-## 路径迁移说明
-
-如果你之前使用的是旧默认路径：
-
-- `~/.claude/profiles.json`
-- `~/.claude/backups/`
-
-建议迁移到新的命名空间目录：
-
-- `~/.claude/cc-switch/profiles.json`
-- `~/.claude/cc-switch/backups/`
-
-当前实现不会自动搬迁旧文件；如果旧数据还在老路径，推荐通过 `cc-switch import --from <旧 .env 目录>` 重新导入，或者手工移动 `profiles.json` 到新位置。
-
 ## 安装
 
 ### 方式 1：直接构建
@@ -413,26 +399,14 @@ unknown command: foo
 
 ## 推荐使用流程
 
-### 首次迁移
-
-1. 准备旧 `.env` 目录
-2. 执行 `cc-switch import --from <dir>`
-3. 执行 `cc-switch list`
-4. 执行 `cc-switch use <name>`
-5. 打开 `~/.claude/settings.json` 检查 `env` 是否已更新
-6. 确认备份出现在 `~/.claude/cc-switch/backups/`
-
-### 日常切换
-
-1. `cc-switch list`
-2. `cc-switch use <name>`
-3. `cc-switch current`
-
-### 手工新增配置
-
-1. `cc-switch add <name> --token ... --base-url ...`
-2. 按需补充模型字段
-3. `cc-switch use <name>`
+1. 如果你有旧 `.env` 配置，执行 `cc-switch import --from <dir>`
+2. 执行 `cc-switch list`
+3. 如果需要手工新增配置，执行 `cc-switch add <name> --token ... --base-url ...`
+4. 按需补充模型字段
+5. 执行 `cc-switch use <name>`
+6. 执行 `cc-switch current`
+7. 打开 `~/.claude/settings.json` 检查 `env` 是否已更新
+8. 确认备份出现在 `~/.claude/cc-switch/backups/`
 
 ## 当前限制
 

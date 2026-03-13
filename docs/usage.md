@@ -354,32 +354,15 @@ export ANTHROPIC_DEFAULT_HAIKU_MODEL="MiniMax-M2.5"
 - 不会先生成旧文件备份
 - 会直接创建最小 JSON 对象后写入新的 `env`
 
-## 9. 从旧默认路径迁移
+## 9. 常见错误
 
-如果你之前使用过旧方案，可能还会有这些历史路径：
-
-- `~/.claude/profiles.json`
-- `~/.claude/backups/`
-
-当前实现不会自动搬迁它们。
-
-推荐迁移方式：
-
-1. 保留旧文件作为历史备份
-2. 用 `cc-switch import --from <旧 .env 目录>` 重新导入
-3. 确认新数据写入 `~/.claude/cc-switch/profiles.json`
-4. 用 `cc-switch use <name>` 验证切换
-5. 确认备份生成在 `~/.claude/cc-switch/backups/`
-
-## 10. 常见错误
-
-### 10.1 profile 不存在
+### 9.1 profile 不存在
 
 ```text
 profile "demo" not found
 ```
 
-### 10.2 缺少必填字段
+### 9.2 缺少必填字段
 
 ```text
 profile "demo" missing required field: ANTHROPIC_BASE_URL
@@ -391,7 +374,7 @@ profile "demo" missing required field: ANTHROPIC_BASE_URL
 missing required field: ANTHROPIC_AUTH_TOKEN
 ```
 
-### 10.3 `settings.json` 非法
+### 9.3 `settings.json` 非法
 
 ```text
 write settings env: invalid character ...
@@ -399,42 +382,30 @@ write settings env: invalid character ...
 
 此时不会继续写入，也不会推进当前 profile。
 
-### 10.4 未提供导入目录
+### 9.4 未提供导入目录
 
 ```text
 --from is required
 ```
 
-### 10.5 命令不存在
+### 9.5 命令不存在
 
 ```text
 unknown command: foo
 ```
 
-## 11. 推荐操作流程
+## 10. 推荐操作流程
 
-### 11.1 首次迁移
+1. 如果你有旧 `.env` 配置，执行 `cc-switch import --from <dir>`
+2. 执行 `cc-switch list`
+3. 如果需要手工新增配置，执行 `cc-switch add <name> --token ... --base-url ...`
+4. 按需补模型字段
+5. 执行 `cc-switch use <name>`
+6. 执行 `cc-switch current`
+7. 检查 `~/.claude/settings.json` 的 `env`
+8. 检查 `~/.claude/cc-switch/backups/` 是否生成备份
 
-1. 准备旧 `.env` 目录
-2. 执行 `cc-switch import --from <dir>`
-3. 执行 `cc-switch list`
-4. 执行 `cc-switch use <name>`
-5. 检查 `~/.claude/settings.json` 的 `env`
-6. 检查 `~/.claude/cc-switch/backups/` 是否生成备份
-
-### 11.2 日常切换
-
-1. `cc-switch list`
-2. `cc-switch use <name>`
-3. `cc-switch current`
-
-### 11.3 手工新增配置
-
-1. `cc-switch add <name> --token ... --base-url ...`
-2. 按需补模型字段
-3. `cc-switch use <name>`
-
-## 12. 当前限制
+## 11. 当前限制
 
 - 只支持 profile 白名单中的 6 个环境变量
 - `add/edit` 只支持逐项文本交互，不支持方向键选择或表单式 UI
@@ -442,7 +413,7 @@ unknown command: foo
 - 目前没有 shell 自动补全
 - 目前没有单独的 `show <name>` 命令
 
-## 13. 已覆盖的边缘用例
+## 12. 已覆盖的边缘用例
 
 当前自动化测试已经覆盖这些交互和校验场景：
 
@@ -456,7 +427,7 @@ unknown command: foo
 - 备份目录不可写时，`use` 失败且 `current` 不推进
 - 自定义 `CC_SWITCH_PROFILES_PATH` / `CC_SWITCH_SETTINGS_PATH` 下的 `add -> use -> current` 流程可正常工作
 
-## 14. 建议继续补测
+## 13. 建议继续补测
 
 建议后续继续补下面这些自动化或人工回归场景：
 
@@ -465,6 +436,6 @@ unknown command: foo
 - 真实终端环境下长 token、短 token、空 token 的提示体验是否一致
 - `settings.json` 很大、包含复杂插件配置时，格式化重写是否仍符合预期
 
-## 15. 相关文档
+## 14. 相关文档
 
 - [README.md](/Users/liuzhiqiang/DevOps/cc-switch/README.md)
