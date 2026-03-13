@@ -1,0 +1,1405 @@
+package cli
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"cc-switch/internal/profile"
+)
+
+func TestMain(m *testing.M) {
+	promptInteractive = func() bool { return false }
+	os.Exit(m.Run())
+}
+
+func TestTTYHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_TTY_HELPER") != "1" {
+		return
+	}
+
+	promptReader = os.Stdin
+	promptWriter = os.Stdout
+	promptInteractive = func() bool {
+		stat, err := os.Stdin.Stat()
+		if err != nil {
+			return false
+		}
+		return stat.Mode()&os.ModeCharDevice != 0
+	}
+
+	args := helperArgs(os.Args)
+	os.Exit(Run(args, os.Stdout, os.Stderr))
+}
+
+func TestRun_NoArgsShowsStatus(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run(nil, &stdout, &stderr)
+
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+
+	if got := stdout.String(); got != "current: unknown\n" {
+		t.Fatalf("expected status output, got %q", got)
+	}
+
+	if got := stderr.String(); got != "" {
+		t.Fatalf("expected empty stderr, got %q", got)
+	}
+}
+
+func TestRun_UseUpdatesSettingsEnvAndCurrentProfile(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "beta",
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+					"ANTHROPIC_MODEL":    "glm-5",
+				},
+			},
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+		},
+	})
+	settingsPath := writeSettingsFixture(t, `{
+  "model": "opus",
+  "enabledPlugins": {
+    "demo": true
+  },
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "old-token"
+  }
+}
+`)
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+	t.Setenv("CC_SWITCH_SETTINGS_PATH", settingsPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"use", "demo"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after switch: %v", err)
+	}
+
+	if savedProfiles.Current != "demo" {
+		t.Fatalf("expected current profile demo, got %q", savedProfiles.Current)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings after switch: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(content, &got); err != nil {
+		t.Fatalf("unmarshal settings after switch: %v", err)
+	}
+
+	if got["model"] != "opus" {
+		t.Fatalf("expected model to remain unchanged, got %#v", got["model"])
+	}
+
+	env, ok := got["env"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected env object, got %#v", got["env"])
+	}
+
+	if env[profile.EnvAuthToken] != "token-demo" {
+		t.Fatalf("expected switched token, got %#v", env[profile.EnvAuthToken])
+	}
+
+	if env[profile.EnvBaseURL] != "https://demo.example.com" {
+		t.Fatalf("expected switched base url, got %#v", env[profile.EnvBaseURL])
+	}
+}
+
+func TestRun_UseDoesNotAdvanceCurrentWhenSettingsWriteFails(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "beta",
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+		},
+	})
+	settingsPath := writeSettingsFixture(t, `{"env":`)
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+	t.Setenv("CC_SWITCH_SETTINGS_PATH", settingsPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"use", "demo"}, &stdout, &stderr)
+	if exitCode == 0 {
+		t.Fatal("expected switch to fail when settings json is invalid")
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after failed switch: %v", err)
+	}
+
+	if savedProfiles.Current != "beta" {
+		t.Fatalf("expected current profile to remain beta, got %q", savedProfiles.Current)
+	}
+}
+
+func TestRun_AddPersistsProfile(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version:  1,
+		Profiles: map[string]profile.Profile{},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{
+		"add",
+		"demo",
+		"--description", "Demo profile",
+		"--token", "token-demo",
+		"--base-url", "https://demo.example.com",
+		"--model", "glm-5",
+	}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected add to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after add: %v", err)
+	}
+
+	saved := savedProfiles.Profiles["demo"]
+	if saved.Description != "Demo profile" {
+		t.Fatalf("expected description to persist, got %q", saved.Description)
+	}
+
+	if saved.Env[profile.EnvAuthToken] != "token-demo" {
+		t.Fatalf("expected token to persist, got %q", saved.Env[profile.EnvAuthToken])
+	}
+
+	if saved.Env["ANTHROPIC_MODEL"] != "glm-5" {
+		t.Fatalf("expected model to persist, got %q", saved.Env["ANTHROPIC_MODEL"])
+	}
+}
+
+func TestRun_EditUpdatesExistingProfile(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Description: "Old description",
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-old",
+					profile.EnvBaseURL:   "https://old.example.com",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{
+		"edit",
+		"demo",
+		"--description", "New description",
+		"--base-url", "https://new.example.com",
+		"--model", "glm-5",
+	}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected edit to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after edit: %v", err)
+	}
+
+	saved := savedProfiles.Profiles["demo"]
+	if saved.Description != "New description" {
+		t.Fatalf("expected description to update, got %q", saved.Description)
+	}
+
+	if saved.Env[profile.EnvAuthToken] != "token-old" {
+		t.Fatalf("expected missing token flag to preserve previous value, got %q", saved.Env[profile.EnvAuthToken])
+	}
+
+	if saved.Env[profile.EnvBaseURL] != "https://new.example.com" {
+		t.Fatalf("expected base url to update, got %q", saved.Env[profile.EnvBaseURL])
+	}
+
+	if saved.Env["ANTHROPIC_MODEL"] != "glm-5" {
+		t.Fatalf("expected model to update, got %q", saved.Env["ANTHROPIC_MODEL"])
+	}
+}
+
+func TestRun_AddRejectsMissingRequiredFields(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version:  1,
+		Profiles: map[string]profile.Profile{},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{
+		"add",
+		"demo",
+		"--base-url", "https://demo.example.com",
+	}, &stdout, &stderr)
+	if exitCode == 0 {
+		t.Fatal("expected add to fail when token is missing")
+	}
+}
+
+func TestRun_AddRejectsMissingNameNonInteractive(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version:  1,
+		Profiles: map[string]profile.Profile{},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{
+		"add",
+		"--token", "token-demo",
+		"--base-url", "https://demo.example.com",
+	}, &stdout, &stderr)
+	if exitCode == 0 {
+		t.Fatal("expected add to fail when name is missing in non-interactive mode")
+	}
+
+	if got := stderr.String(); got != "profile name is required\n" {
+		t.Fatalf("expected missing name error, got %q", got)
+	}
+}
+
+func TestRun_AddRejectsMissingBaseURLNonInteractive(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version:  1,
+		Profiles: map[string]profile.Profile{},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{
+		"add",
+		"demo",
+		"--token", "token-demo",
+	}, &stdout, &stderr)
+	if exitCode == 0 {
+		t.Fatal("expected add to fail when base url is missing in non-interactive mode")
+	}
+
+	if got := stderr.String(); !strings.Contains(got, "missing required field: ANTHROPIC_BASE_URL") {
+		t.Fatalf("expected missing base url error, got %q", got)
+	}
+}
+
+func TestRun_AddRejectsDuplicateName(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{
+		"add",
+		"demo",
+		"--token", "token-new",
+		"--base-url", "https://new.example.com",
+	}, &stdout, &stderr)
+	if exitCode == 0 {
+		t.Fatal("expected add to fail when profile name already exists")
+	}
+
+	if got := stderr.String(); got != "profile \"demo\" already exists\n" {
+		t.Fatalf("expected duplicate profile error, got %q", got)
+	}
+}
+
+func TestRun_AddInteractivePromptsForAllFields(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version:  1,
+		Profiles: map[string]profile.Profile{},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	promptOutput := withPromptSession(t, strings.Join([]string{
+		"demo",
+		"Demo profile",
+		"token-demo",
+		"https://demo.example.com",
+		"glm-5",
+		"glm-5",
+		"kimi-k2.5",
+		"MiniMax-M2.5",
+		"",
+	}, "\n"))
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"add"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected interactive add to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after interactive add: %v", err)
+	}
+
+	saved := savedProfiles.Profiles["demo"]
+	if saved.Description != "Demo profile" {
+		t.Fatalf("expected description to be collected, got %q", saved.Description)
+	}
+
+	if saved.Env[profile.EnvAuthToken] != "token-demo" {
+		t.Fatalf("expected token to be collected, got %q", saved.Env[profile.EnvAuthToken])
+	}
+
+	if saved.Env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] != "MiniMax-M2.5" {
+		t.Fatalf("expected optional models to be collected, got %q", saved.Env["ANTHROPIC_DEFAULT_HAIKU_MODEL"])
+	}
+
+	for _, fragment := range []string{
+		"name: ",
+		"description (optional): ",
+		"ANTHROPIC_AUTH_TOKEN: ",
+		"ANTHROPIC_BASE_URL: ",
+		"ANTHROPIC_MODEL (optional): ",
+	} {
+		if !strings.Contains(promptOutput.String(), fragment) {
+			t.Fatalf("expected prompt output to contain %q, got %q", fragment, promptOutput.String())
+		}
+	}
+}
+
+func TestRun_AddInteractiveRejectsDuplicateNameBeforeFurtherPrompts(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	promptOutput := withPromptSession(t, "demo\n")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"add"}, &stdout, &stderr)
+	if exitCode == 0 {
+		t.Fatal("expected interactive add to fail for duplicate name")
+	}
+
+	if got := stderr.String(); got != "profile \"demo\" already exists\n" {
+		t.Fatalf("expected duplicate name error, got %q", got)
+	}
+
+	if strings.Contains(promptOutput.String(), "description (optional): ") {
+		t.Fatalf("expected duplicate name to stop before prompting other fields, got %q", promptOutput.String())
+	}
+}
+
+func TestRun_AddInteractiveInterruptedInputFails(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version:  1,
+		Profiles: map[string]profile.Profile{},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	withPromptSession(t, "demo\n")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"add"}, &stdout, &stderr)
+	if exitCode == 0 {
+		t.Fatal("expected interactive add to fail when input is interrupted")
+	}
+
+	if got := stderr.String(); got != "EOF\n" {
+		t.Fatalf("expected EOF error, got %q", got)
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after interrupted add: %v", err)
+	}
+
+	if len(savedProfiles.Profiles) != 0 {
+		t.Fatalf("expected no profile to be written on interrupted input, got %#v", savedProfiles.Profiles)
+	}
+}
+
+func TestRun_AddRealTTYCtrlDAbortsWithoutWrite(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version:  1,
+		Profiles: map[string]profile.Profile{},
+	})
+
+	exitCode, output := runWithTTY(t, scriptPath, []string{"add"}, "demo\n\x04", map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+
+	if exitCode == 0 {
+		t.Fatalf("expected Ctrl+D in real TTY add to fail, output=%q", output)
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after real TTY Ctrl+D: %v", err)
+	}
+
+	if len(savedProfiles.Profiles) != 0 {
+		t.Fatalf("expected no profile to be written after Ctrl+D, got %#v", savedProfiles.Profiles)
+	}
+}
+
+func TestRun_AddRealTTYCtrlCAbortsWithoutWrite(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version:  1,
+		Profiles: map[string]profile.Profile{},
+	})
+
+	exitCode, output := runWithTTY(t, scriptPath, []string{"add"}, "\x03", map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+
+	if exitCode == 0 {
+		t.Fatalf("expected Ctrl+C in real TTY add to fail, output=%q", output)
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after real TTY Ctrl+C: %v", err)
+	}
+
+	if len(savedProfiles.Profiles) != 0 {
+		t.Fatalf("expected no profile to be written after Ctrl+C, got %#v", savedProfiles.Profiles)
+	}
+
+	if strings.TrimSpace(output) == "" {
+		t.Fatal("expected Ctrl+C output to contain an interruption trace")
+	}
+
+	lowerOutput := strings.ToLower(output)
+	if !strings.Contains(output, "^C") && !strings.Contains(lowerOutput, "interrupt") {
+		t.Fatalf("expected Ctrl+C output to show interruption, got %q", output)
+	}
+}
+
+func TestRun_AddRealTTYBlankInputFails(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version:  1,
+		Profiles: map[string]profile.Profile{},
+	})
+
+	exitCode, output := runWithTTY(t, scriptPath, []string{"add"}, "\n", map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+
+	if exitCode == 0 {
+		t.Fatalf("expected blank input in real TTY add to fail, output=%q", output)
+	}
+
+	if !strings.Contains(output, "missing required field: name") {
+		t.Fatalf("expected missing name message in real TTY add, got %q", output)
+	}
+}
+
+func TestRun_EditInteractivePromptsAndKeepsExistingValuesOnBlank(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Description: "Old description",
+				Env: map[string]string{
+					profile.EnvAuthToken:             "token-old",
+					profile.EnvBaseURL:               "https://old.example.com",
+					"ANTHROPIC_MODEL":                "glm-old",
+					"ANTHROPIC_DEFAULT_OPUS_MODEL":   "opus-old",
+					"ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-old",
+					"ANTHROPIC_DEFAULT_HAIKU_MODEL":  "haiku-old",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	promptOutput := withPromptSession(t, strings.Join([]string{
+		"",
+		"",
+		"https://new.example.com",
+		"",
+		"",
+		"",
+		"",
+		"",
+	}, "\n"))
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"edit", "demo"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected interactive edit to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after interactive edit: %v", err)
+	}
+
+	saved := savedProfiles.Profiles["demo"]
+	if saved.Description != "Old description" {
+		t.Fatalf("expected blank description input to preserve old value, got %q", saved.Description)
+	}
+
+	if saved.Env[profile.EnvAuthToken] != "token-old" {
+		t.Fatalf("expected blank token input to preserve old value, got %q", saved.Env[profile.EnvAuthToken])
+	}
+
+	if saved.Env[profile.EnvBaseURL] != "https://new.example.com" {
+		t.Fatalf("expected base url to update, got %q", saved.Env[profile.EnvBaseURL])
+	}
+
+	if saved.Env["ANTHROPIC_MODEL"] != "glm-old" {
+		t.Fatalf("expected blank model input to preserve old value, got %q", saved.Env["ANTHROPIC_MODEL"])
+	}
+
+	if strings.Contains(promptOutput.String(), "token-old") {
+		t.Fatalf("expected token prompt to be masked, got %q", promptOutput.String())
+	}
+
+	if !strings.Contains(promptOutput.String(), "ANTHROPIC_AUTH_TOKEN [to") {
+		t.Fatalf("expected masked token prompt, got %q", promptOutput.String())
+	}
+}
+
+func TestRun_EditInteractiveBlankOptionalFieldKeepsMissingKey(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Description: "Old description",
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-old",
+					profile.EnvBaseURL:   "https://old.example.com",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	promptOutput := withPromptSession(t, strings.Join([]string{
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+	}, "\n")+"\n")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"edit", "demo"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected edit with blank optional fields to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after edit: %v", err)
+	}
+
+	if _, exists := savedProfiles.Profiles["demo"].Env["ANTHROPIC_MODEL"]; exists {
+		t.Fatalf("expected blank optional model to keep key absent, got %#v", savedProfiles.Profiles["demo"].Env)
+	}
+
+	if !strings.Contains(promptOutput.String(), "ANTHROPIC_MODEL (enter to keep): ") {
+		t.Fatalf("expected optional model prompt, got %q", promptOutput.String())
+	}
+}
+
+func TestRun_EditInteractiveInterruptedInputFailsWithoutMutation(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Description: "Old description",
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-old",
+					profile.EnvBaseURL:   "https://old.example.com",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	withPromptSession(t, "")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"edit", "demo"}, &stdout, &stderr)
+	if exitCode == 0 {
+		t.Fatal("expected interactive edit to fail when input is interrupted")
+	}
+
+	if got := stderr.String(); got != "EOF\n" {
+		t.Fatalf("expected EOF error, got %q", got)
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after interrupted edit: %v", err)
+	}
+
+	if savedProfiles.Profiles["demo"].Description != "Old description" {
+		t.Fatalf("expected interrupted edit to leave profile unchanged, got %#v", savedProfiles.Profiles["demo"])
+	}
+}
+
+func TestRun_EditRealTTYMultipleEntersKeepValues(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Description: "Old description",
+				Env: map[string]string{
+					profile.EnvAuthToken:             "token-old",
+					profile.EnvBaseURL:               "https://old.example.com",
+					"ANTHROPIC_MODEL":                "glm-old",
+					"ANTHROPIC_DEFAULT_OPUS_MODEL":   "opus-old",
+					"ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-old",
+					"ANTHROPIC_DEFAULT_HAIKU_MODEL":  "haiku-old",
+				},
+			},
+		},
+	})
+
+	exitCode, output := runWithTTY(t, scriptPath, []string{"edit", "demo"}, strings.Repeat("\n", 7), map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+
+	if exitCode != 0 {
+		t.Fatalf("expected multiple enters in real TTY edit to succeed, output=%q", output)
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after real TTY edit: %v", err)
+	}
+
+	saved := savedProfiles.Profiles["demo"]
+	if saved.Description != "Old description" {
+		t.Fatalf("expected description to remain unchanged, got %q", saved.Description)
+	}
+	if saved.Env[profile.EnvAuthToken] != "token-old" || saved.Env[profile.EnvBaseURL] != "https://old.example.com" {
+		t.Fatalf("expected required fields to remain unchanged, got %#v", saved.Env)
+	}
+}
+
+func TestRun_EditInteractiveSkipsPromptForExplicitFields(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Description: "Old description",
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-old",
+					profile.EnvBaseURL:   "https://old.example.com",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	promptOutput := withPromptSession(t, strings.Join([]string{
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+	}, "\n")+"\n")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"edit", "demo", "--token", "token-new"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected edit with explicit token to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after edit: %v", err)
+	}
+
+	if savedProfiles.Profiles["demo"].Env[profile.EnvAuthToken] != "token-new" {
+		t.Fatalf("expected explicit token to win, got %q", savedProfiles.Profiles["demo"].Env[profile.EnvAuthToken])
+	}
+
+	if strings.Contains(promptOutput.String(), "ANTHROPIC_AUTH_TOKEN [") {
+		t.Fatalf("expected token prompt to be skipped when explicit token is provided, got %q", promptOutput.String())
+	}
+}
+
+func TestRun_EditInteractiveMasksShortToken(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Description: "Old description",
+				Env: map[string]string{
+					profile.EnvAuthToken: "abcd",
+					profile.EnvBaseURL:   "https://old.example.com",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	promptOutput := withPromptSession(t, strings.Join([]string{
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+	}, "\n")+"\n")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"edit", "demo"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected edit with short token to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	if strings.Contains(promptOutput.String(), "abcd") {
+		t.Fatalf("expected short token to stay masked, got %q", promptOutput.String())
+	}
+
+	if !strings.Contains(promptOutput.String(), "ANTHROPIC_AUTH_TOKEN [****] (enter to keep): ") {
+		t.Fatalf("expected short token mask prompt, got %q", promptOutput.String())
+	}
+}
+
+func TestRun_UseDoesNotAdvanceCurrentWhenBackupDirUnwritable(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "beta",
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+		},
+	})
+	settingsPath := writeSettingsFixture(t, `{"env":{"ANTHROPIC_AUTH_TOKEN":"old-token"}}`)
+
+	homeFile := filepath.Join(t.TempDir(), "home-file")
+	if err := os.WriteFile(homeFile, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write fake home file: %v", err)
+	}
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+	t.Setenv("CC_SWITCH_SETTINGS_PATH", settingsPath)
+	t.Setenv("HOME", homeFile)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"use", "demo"}, &stdout, &stderr)
+	if exitCode == 0 {
+		t.Fatal("expected use to fail when backup dir is not writable")
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after failed use: %v", err)
+	}
+
+	if savedProfiles.Current != "beta" {
+		t.Fatalf("expected current profile to remain beta, got %q", savedProfiles.Current)
+	}
+}
+
+func TestRun_CustomPathsSupportAddUseAndCurrentFlow(t *testing.T) {
+	root := t.TempDir()
+	profilesPath := filepath.Join(root, "custom", "profiles.json")
+	settingsPath := filepath.Join(root, "custom", "settings.json")
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+	t.Setenv("CC_SWITCH_SETTINGS_PATH", settingsPath)
+
+	var addStdout bytes.Buffer
+	var addStderr bytes.Buffer
+
+	addExitCode := Run([]string{
+		"add",
+		"demo",
+		"--description", "Demo profile",
+		"--token", "token-demo",
+		"--base-url", "https://demo.example.com",
+	}, &addStdout, &addStderr)
+	if addExitCode != 0 {
+		t.Fatalf("expected add on custom paths to succeed, got %d, stderr=%q", addExitCode, addStderr.String())
+	}
+
+	var useStdout bytes.Buffer
+	var useStderr bytes.Buffer
+
+	useExitCode := Run([]string{"use", "demo"}, &useStdout, &useStderr)
+	if useExitCode != 0 {
+		t.Fatalf("expected use on custom paths to succeed, got %d, stderr=%q", useExitCode, useStderr.String())
+	}
+
+	var currentStdout bytes.Buffer
+	var currentStderr bytes.Buffer
+
+	currentExitCode := Run([]string{"current"}, &currentStdout, &currentStderr)
+	if currentExitCode != 0 {
+		t.Fatalf("expected current on custom paths to succeed, got %d, stderr=%q", currentExitCode, currentStderr.String())
+	}
+
+	if got := currentStdout.String(); got != "demo\n" {
+		t.Fatalf("expected current output for custom paths, got %q", got)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings from custom path: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(content, &got); err != nil {
+		t.Fatalf("unmarshal settings from custom path: %v", err)
+	}
+
+	env, ok := got["env"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected env object in custom settings, got %#v", got["env"])
+	}
+
+	if env[profile.EnvAuthToken] != "token-demo" {
+		t.Fatalf("expected custom settings token, got %#v", env[profile.EnvAuthToken])
+	}
+}
+
+func TestRun_UseDoesNotAdvanceCurrentWhenCustomSettingsPathUnwritable(t *testing.T) {
+	root := t.TempDir()
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "beta",
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+		},
+	})
+	settingsDirAsFile := filepath.Join(root, "settings-parent")
+	if err := os.WriteFile(settingsDirAsFile, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write fake settings parent file: %v", err)
+	}
+	settingsPath := filepath.Join(settingsDirAsFile, "settings.json")
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+	t.Setenv("CC_SWITCH_SETTINGS_PATH", settingsPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"use", "demo"}, &stdout, &stderr)
+	if exitCode == 0 {
+		t.Fatal("expected use to fail when custom settings path is not writable")
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after failed use: %v", err)
+	}
+
+	if savedProfiles.Current != "beta" {
+		t.Fatalf("expected current profile to remain beta, got %q", savedProfiles.Current)
+	}
+}
+
+func TestRun_RemoveRejectsCurrentProfile(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"remove", "demo"}, &stdout, &stderr)
+	if exitCode == 0 {
+		t.Fatal("expected remove to fail for current profile")
+	}
+}
+
+func TestRun_RemoveDeletesNonCurrentProfile(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"remove", "beta"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected remove to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after remove: %v", err)
+	}
+
+	if _, exists := savedProfiles.Profiles["beta"]; exists {
+		t.Fatal("expected beta profile to be removed")
+	}
+}
+
+func TestRun_RenameMovesProfileAndCurrentPointer(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Description: "Demo",
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"rename", "demo", "prod"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected rename to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after rename: %v", err)
+	}
+
+	if savedProfiles.Current != "prod" {
+		t.Fatalf("expected current profile to move to prod, got %q", savedProfiles.Current)
+	}
+
+	if _, exists := savedProfiles.Profiles["demo"]; exists {
+		t.Fatal("expected old profile name to be removed")
+	}
+
+	if savedProfiles.Profiles["prod"].Description != "Demo" {
+		t.Fatalf("expected profile data to survive rename, got %#v", savedProfiles.Profiles["prod"])
+	}
+}
+
+func TestRun_ImportLoadsLegacyEnvFiles(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Profiles: map[string]profile.Profile{
+			"existing": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-existing",
+					profile.EnvBaseURL:   "https://existing.example.com",
+				},
+			},
+		},
+	})
+	importDir := t.TempDir()
+	writeLegacyEnvFixture(t, filepath.Join(importDir, "demo.env"), "# Demo profile\nexport ANTHROPIC_AUTH_TOKEN=\"token-demo\"\nexport ANTHROPIC_BASE_URL=\"https://demo.example.com\"\nexport ANTHROPIC_MODEL=\"glm-5\"\n")
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"import", "--from", importDir}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected import to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after import: %v", err)
+	}
+
+	imported := savedProfiles.Profiles["demo"]
+	if imported.Description != "Demo profile" {
+		t.Fatalf("expected imported description, got %q", imported.Description)
+	}
+
+	if imported.Env["ANTHROPIC_MODEL"] != "glm-5" {
+		t.Fatalf("expected imported model, got %q", imported.Env["ANTHROPIC_MODEL"])
+	}
+}
+
+func TestRun_CurrentPrintsCurrentProfile(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token",
+					profile.EnvBaseURL:   "https://example.com",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"current"}, &stdout, &stderr)
+
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+
+	if got := stdout.String(); got != "demo\n" {
+		t.Fatalf("expected current profile output, got %q", got)
+	}
+}
+
+func TestRun_ListPrintsProfiles(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-b",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-a",
+					profile.EnvBaseURL:   "https://example.com",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"list"}, &stdout, &stderr)
+
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+
+	if got := stdout.String(); got != "beta\ndemo\n" {
+		t.Fatalf("expected sorted profile list, got %q", got)
+	}
+}
+
+func TestRun_NoArgsShowsBaseURLAndModel(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token",
+					profile.EnvBaseURL:   "https://example.com",
+					"ANTHROPIC_MODEL":    "glm-5",
+				},
+			},
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-b",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run(nil, &stdout, &stderr)
+
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+
+	want := "current: demo\nbase_url: https://example.com\nmodel: glm-5\navailable: beta\n"
+	if got := stdout.String(); got != want {
+		t.Fatalf("expected status output %q, got %q", want, got)
+	}
+
+	if got := stderr.String(); got != "" {
+		t.Fatalf("expected empty stderr, got %q", got)
+	}
+}
+
+func writeProfilesFixture(t *testing.T, data profile.ProfilesFile) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "profiles.json")
+	if err := profile.Save(path, data); err != nil {
+		t.Fatalf("save profiles fixture: %v", err)
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("fixture missing: %v", err)
+	}
+
+	return path
+}
+
+func writeSettingsFixture(t *testing.T, content string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write settings fixture: %v", err)
+	}
+
+	return path
+}
+
+func writeLegacyEnvFixture(t *testing.T, path, content string) {
+	t.Helper()
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write legacy env fixture: %v", err)
+	}
+}
+
+func withPromptSession(t *testing.T, input string) *bytes.Buffer {
+	t.Helper()
+
+	oldPromptReader := promptReader
+	oldPromptWriter := promptWriter
+	oldPromptInteractive := promptInteractive
+
+	t.Cleanup(func() {
+		promptReader = oldPromptReader
+		promptWriter = oldPromptWriter
+		promptInteractive = oldPromptInteractive
+	})
+
+	var output bytes.Buffer
+	promptReader = strings.NewReader(input)
+	promptWriter = &output
+	promptInteractive = func() bool { return true }
+
+	return &output
+}
+
+func requireScript(t *testing.T) string {
+	t.Helper()
+
+	path, err := exec.LookPath("script")
+	if err != nil {
+		t.Skip("script command not available")
+	}
+
+	return path
+}
+
+func runWithTTY(t *testing.T, scriptPath string, args []string, input string, env map[string]string) (int, string) {
+	t.Helper()
+
+	cmdArgs := append([]string{"-q", "/dev/null", os.Args[0], "-test.run=^TestTTYHelperProcess$"}, append([]string{"--"}, args...)...)
+	cmd := exec.Command(scriptPath, cmdArgs...)
+	cmd.Env = append(os.Environ(), "GO_WANT_TTY_HELPER=1")
+	for key, value := range env {
+		cmd.Env = append(cmd.Env, key+"="+value)
+	}
+
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start tty command: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	if _, err := io.WriteString(stdin, input); err != nil {
+		t.Fatalf("write tty input: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if err := stdin.Close(); err != nil {
+		t.Fatalf("close tty stdin: %v", err)
+	}
+
+	err = cmd.Wait()
+	if err == nil {
+		return 0, output.String()
+	}
+
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("wait tty command: %v", err)
+	}
+
+	return exitErr.ExitCode(), output.String()
+}
+
+func helperArgs(argv []string) []string {
+	for i, arg := range argv {
+		if arg == "--" {
+			return argv[i+1:]
+		}
+	}
+	return nil
+}
