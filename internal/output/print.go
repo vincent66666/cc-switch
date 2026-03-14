@@ -10,7 +10,7 @@ import (
 
 func RenderStatus(w io.Writer, currentDisplay string, currentProfile profile.Profile, names []string) int {
 	styler := newStyler(w)
-	if styler.enabled && len(names) > 0 {
+	if styler.enabled {
 		renderStyledStatus(w, styler, currentDisplay, currentProfile, names)
 		return 0
 	}
@@ -31,10 +31,10 @@ func RenderStatus(w io.Writer, currentDisplay string, currentProfile profile.Pro
 	return 0
 }
 
-func RenderList(w io.Writer, names []string) int {
+func RenderList(w io.Writer, currentDisplay string, names []string) int {
 	styler := newStyler(w)
 	if styler.enabled {
-		renderStyledList(w, styler, names)
+		renderStyledList(w, styler, currentDisplay, names)
 		return 0
 	}
 
@@ -50,22 +50,22 @@ func renderStyledStatus(w io.Writer, styler styler, currentDisplay string, curre
 		model = "-"
 	}
 
-	writeStyledSection(w, styler.heading("当前配置"), styler.current(currentDisplay))
-	writeStyledSection(w, styler.heading("接口地址"), currentProfile.Env[profile.EnvBaseURL])
-	writeStyledSection(w, styler.heading("模型"), model)
+	writeStyledLine(w, styler.current("当前配置："+currentDisplay))
+	writeStyledLine(w, styler.heading("接口地址："+currentProfile.Env[profile.EnvBaseURL]))
+	writeStyledLine(w, styler.heading("模型："+model))
 
 	if len(names) == 0 {
 		return
 	}
 
-	_, _ = fmt.Fprintf(w, "\n%s\n", styler.heading("可用配置"))
+	_, _ = fmt.Fprintf(w, "\n%s\n", styler.heading("可用配置："))
 	for _, name := range names {
 		_, _ = fmt.Fprintf(w, "  %s\n", name)
 	}
 }
 
-func renderStyledList(w io.Writer, styler styler, names []string) {
-	current, others := splitCurrent(names)
+func renderStyledList(w io.Writer, styler styler, currentDisplay string, names []string) {
+	current, others := splitCurrent(names, currentDisplay)
 	if current != "" {
 		writeStyledSection(w, styler.heading("当前配置"), styler.current(current))
 	}
@@ -74,13 +74,21 @@ func renderStyledList(w io.Writer, styler styler, names []string) {
 		return
 	}
 
+	heading := "其他配置"
+	if current == "" {
+		heading = "可用配置"
+	}
 	if current != "" {
 		_, _ = io.WriteString(w, "\n")
 	}
-	_, _ = fmt.Fprintf(w, "%s\n", styler.heading("其他配置"))
+	_, _ = fmt.Fprintf(w, "%s\n", styler.heading(heading))
 	for _, name := range others {
 		_, _ = fmt.Fprintf(w, "  %s\n", name)
 	}
+}
+
+func writeStyledLine(w io.Writer, line string) {
+	_, _ = fmt.Fprintf(w, "%s\n", line)
 }
 
 func writeStyledSection(w io.Writer, heading, value string) {
@@ -88,15 +96,20 @@ func writeStyledSection(w io.Writer, heading, value string) {
 	_, _ = fmt.Fprintf(w, "  %s\n", value)
 }
 
-func splitCurrent(names []string) (string, []string) {
-	others := make([]string, 0, len(names))
-	for i, name := range names {
-		if strings.Contains(name, "（当前）") {
-			others = append(others, names[:i]...)
-			others = append(others, names[i+1:]...)
-			return name, others
-		}
+func splitCurrent(names []string, currentDisplay string) (string, []string) {
+	if currentDisplay == "" {
+		return "", append([]string(nil), names...)
 	}
 
-	return "", append(others, names...)
+	others := make([]string, 0, len(names))
+	current := ""
+	for _, name := range names {
+		if name == currentDisplay {
+			current = name
+			continue
+		}
+		others = append(others, name)
+	}
+
+	return current, others
 }

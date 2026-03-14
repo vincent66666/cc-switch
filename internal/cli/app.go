@@ -157,7 +157,12 @@ func runList(paths Paths, stdout, stderr io.Writer) int {
 		}, stdout, stderr)
 	}
 
-	return output.RenderList(stdout, displayNamesForProfiles(data.Profiles, names))
+	currentDisplay := ""
+	if currentProfile, ok := data.Profiles[data.Current]; ok {
+		currentDisplay = profileDisplayName(data.Current, currentProfile.Description)
+	}
+
+	return output.RenderList(stdout, currentDisplay, displayNamesForProfiles(data.Profiles, names))
 }
 
 func runStatus(paths Paths, stdout, stderr io.Writer) int {
