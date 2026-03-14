@@ -3,12 +3,54 @@ package profile
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
+var ErrCurrentProfileMissing = errors.New("当前配置不存在")
+
+type currentProfileMissingError struct {
+	name string
+}
+
+func (e currentProfileMissingError) Error() string {
+	return fmt.Sprintf("当前配置 %q 不存在", e.name)
+}
+
+func (e currentProfileMissingError) Is(target error) bool {
+	return target == ErrCurrentProfileMissing
+}
+
 func Load(path string) (ProfilesFile, error) {
+	data, err := loadNormalizedProfilesFile(path)
+	if err != nil {
+		return ProfilesFile{}, err
+	}
+
+	if err := validateCurrentProfile(data); err != nil {
+		return ProfilesFile{}, err
+	}
+	return data, nil
+}
+
+func LoadForList(path string) (ProfilesFile, error) {
+	data, err := loadNormalizedProfilesFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ProfilesFile{
+				Version:  1,
+				Profiles: map[string]Profile{},
+			}, nil
+		}
+		return ProfilesFile{}, err
+	}
+	return data, nil
+}
+
+func loadNormalizedProfilesFile(path string) (ProfilesFile, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return ProfilesFile{}, err
@@ -19,6 +61,10 @@ func Load(path string) (ProfilesFile, error) {
 		return ProfilesFile{}, err
 	}
 
+	return normalizeProfilesFile(data)
+}
+
+func normalizeProfilesFile(data ProfilesFile) (ProfilesFile, error) {
 	if data.Version == 0 {
 		data.Version = 1
 	}
@@ -27,28 +73,31 @@ func Load(path string) (ProfilesFile, error) {
 		data.Profiles = map[string]Profile{}
 	}
 
+	normalizedProfiles := make(map[string]Profile, len(data.Profiles))
 	for name, profile := range data.Profiles {
-		if err := ValidateProfile(name, profile); err != nil {
+		normalizedName := normalizeProfileName(name)
+		if _, exists := normalizedProfiles[normalizedName]; exists {
+			return ProfilesFile{}, fmt.Errorf("配置 %q 已存在", normalizedName)
+		}
+		if err := ValidateProfile(normalizedName, profile); err != nil {
 			return ProfilesFile{}, err
 		}
+		normalizedProfiles[normalizedName] = profile
 	}
 
+	data.Current = normalizeProfileName(data.Current)
+	data.Profiles = normalizedProfiles
 	return data, nil
 }
 
 func Save(path string, data ProfilesFile) error {
-	if data.Version == 0 {
-		data.Version = 1
+	var err error
+	data, err = normalizeProfilesFile(data)
+	if err != nil {
+		return err
 	}
-
-	if data.Profiles == nil {
-		data.Profiles = map[string]Profile{}
-	}
-
-	for name, profile := range data.Profiles {
-		if err := ValidateProfile(name, profile); err != nil {
-			return err
-		}
+	if err := validateCurrentProfile(data); err != nil {
+		return err
 	}
 
 	var payload bytes.Buffer
@@ -87,12 +136,26 @@ func Save(path string, data ProfilesFile) error {
 	return nil
 }
 
+func validateCurrentProfile(data ProfilesFile) error {
+	if data.Current == "" {
+		return nil
+	}
+	if _, exists := data.Profiles[data.Current]; !exists {
+		return currentProfileMissingError{name: data.Current}
+	}
+	return nil
+}
+
 func SetCurrent(path, name string) error {
 	data, err := Load(path)
 	if err != nil {
 		return err
 	}
 
+	name = normalizeProfileName(name)
+	if name == "" {
+		return fmt.Errorf("必须提供配置名称")
+	}
 	if _, ok := data.Profiles[name]; !ok {
 		return fmt.Errorf("未找到配置 %q", name)
 	}
@@ -107,6 +170,10 @@ func Remove(path, name string) error {
 		return err
 	}
 
+	name = normalizeProfileName(name)
+	if name == "" {
+		return fmt.Errorf("必须提供配置名称")
+	}
 	if name == data.Current {
 		return fmt.Errorf("不能删除当前正在使用的配置")
 	}
@@ -125,6 +192,11 @@ func Rename(path, oldName, newName string) error {
 		return err
 	}
 
+	oldName = normalizeProfileName(oldName)
+	newName = normalizeProfileName(newName)
+	if oldName == "" || newName == "" {
+		return fmt.Errorf("必须提供旧配置名称和新配置名称")
+	}
 	if _, ok := data.Profiles[oldName]; !ok {
 		return fmt.Errorf("未找到配置 %q", oldName)
 	}
@@ -141,4 +213,8 @@ func Rename(path, oldName, newName string) error {
 	}
 
 	return Save(path, data)
+}
+
+func normalizeProfileName(name string) string {
+	return strings.TrimSpace(name)
 }

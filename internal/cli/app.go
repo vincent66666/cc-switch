@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -115,11 +116,20 @@ func defaultPaths() Paths {
 func runCurrent(paths Paths, stdout, stderr io.Writer) int {
 	data, err := profile.Load(paths.Profiles)
 	if err != nil {
+		if shouldRenderUnknownForProfileLoadError(err) {
+			_, _ = io.WriteString(stdout, "未知\n")
+			return 0
+		}
+		_, _ = fmt.Fprintf(stderr, "加载配置失败：%v\n", err)
+		return 1
+	}
+
+	if data.Current == "" {
 		_, _ = io.WriteString(stdout, "未知\n")
 		return 0
 	}
 
-	if data.Current == "" {
+	if _, ok := data.Profiles[data.Current]; !ok {
 		_, _ = io.WriteString(stdout, "未知\n")
 		return 0
 	}
@@ -129,7 +139,7 @@ func runCurrent(paths Paths, stdout, stderr io.Writer) int {
 }
 
 func runList(paths Paths, stdout, stderr io.Writer) int {
-	data, err := profile.Load(paths.Profiles)
+	data, err := profile.LoadForList(paths.Profiles)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "加载配置失败：%v\n", err)
 		return 1
@@ -150,8 +160,12 @@ func runList(paths Paths, stdout, stderr io.Writer) int {
 func runStatus(paths Paths, stdout, stderr io.Writer) int {
 	data, err := profile.Load(paths.Profiles)
 	if err != nil {
-		_, _ = io.WriteString(stdout, "当前配置：未知\n")
-		return 0
+		if shouldRenderUnknownForProfileLoadError(err) {
+			_, _ = io.WriteString(stdout, "当前配置：未知\n")
+			return 0
+		}
+		_, _ = fmt.Fprintf(stderr, "加载配置失败：%v\n", err)
+		return 1
 	}
 
 	currentProfile, ok := data.Profiles[data.Current]
@@ -181,18 +195,31 @@ func runStatus(paths Paths, stdout, stderr io.Writer) int {
 	)
 }
 
+func shouldRenderUnknownForProfileLoadError(err error) bool {
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+
+	return errors.Is(err, profile.ErrCurrentProfileMissing)
+}
+
 func runUse(paths Paths, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		_, _ = io.WriteString(stderr, "必须提供配置名称\n")
 		return 1
 	}
 
-	return switchProfile(paths, args[0], stdout, stderr)
+	target := normalizeProfileName(args[0])
+	if target == "" {
+		_, _ = io.WriteString(stderr, "必须提供配置名称\n")
+		return 1
+	}
+
+	return switchProfile(paths, target, stdout, stderr)
 }
 
 func switchProfile(paths Paths, target string, stdout, stderr io.Writer) int {
-
-	data, err := profile.Load(paths.Profiles)
+	data, err := profile.LoadForList(paths.Profiles)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "加载配置失败：%v\n", err)
 		return 1
@@ -209,18 +236,90 @@ func switchProfile(paths Paths, target string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	settingsSnapshot, err := readSettingsSnapshot(paths.Settings)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "读取当前 settings.json 失败：%v\n", err)
+		return 1
+	}
+
 	if err := settings.WriteEnv(paths.Settings, targetProfile.Env, time.Now); err != nil {
 		_, _ = fmt.Fprintf(stderr, "写入 settings.json 的 env 失败：%v\n", err)
 		return 1
 	}
 
-	if err := profile.SetCurrent(paths.Profiles, target); err != nil {
+	data.Current = target
+	if err := profile.Save(paths.Profiles, data); err != nil {
+		if restoreErr := restoreSettingsSnapshot(paths.Settings, settingsSnapshot); restoreErr != nil {
+			_, _ = fmt.Fprintf(stderr, "更新当前配置失败：%v；回滚 settings.json 失败：%v\n", err, restoreErr)
+			return 1
+		}
 		_, _ = fmt.Fprintf(stderr, "更新当前配置失败：%v\n", err)
 		return 1
 	}
 
 	_, _ = fmt.Fprintf(stdout, "已切换到配置：%s\n", target)
 	return 0
+}
+
+type settingsSnapshot struct {
+	exists  bool
+	content []byte
+}
+
+func readSettingsSnapshot(path string) (settingsSnapshot, error) {
+	content, err := os.ReadFile(path)
+	if err == nil {
+		return settingsSnapshot{
+			exists:  true,
+			content: content,
+		}, nil
+	}
+
+	if os.IsNotExist(err) {
+		return settingsSnapshot{}, nil
+	}
+
+	return settingsSnapshot{}, err
+}
+
+func restoreSettingsSnapshot(path string, snapshot settingsSnapshot) error {
+	if !snapshot.exists {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+
+	return writeFileAtomically(path, snapshot.content, ".settings-restore-*.json")
+}
+
+func writeFileAtomically(path string, content []byte, pattern string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+
+	tempFile, err := os.CreateTemp(filepath.Dir(path), pattern)
+	if err != nil {
+		return err
+	}
+
+	tempPath := tempFile.Name()
+	if _, err := tempFile.Write(content); err != nil {
+		tempFile.Close()
+		_ = os.Remove(tempPath)
+		return err
+	}
+	if err := tempFile.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return err
+	}
+
+	if err := os.Rename(tempPath, path); err != nil {
+		_ = os.Remove(tempPath)
+		return err
+	}
+
+	return nil
 }
 
 func runInteractiveStatus(paths Paths, selector statusSelector, stdout, stderr io.Writer) int {
@@ -304,6 +403,10 @@ func runInteractiveList(paths Paths, menu listMenu, stdout, stderr io.Writer) in
 			menu.moveDown()
 		case selectorActionEnter:
 			if menu.mode == listMenuModeProfiles {
+				if menuHasMissingCurrentProfile(menu) {
+					closeInteractive()
+					return switchProfile(paths, menu.selectedProfile(), stdout, stderr)
+				}
 				menu.enterActions()
 				continue
 			}
@@ -420,7 +523,7 @@ func startInteractiveTerminalSession(stdinFile *os.File, stdout io.Writer) (func
 }
 
 func reloadListMenu(paths Paths, selectedName string, selectedIndex int) (listMenu, error) {
-	data, err := profile.Load(paths.Profiles)
+	data, err := profile.LoadForList(paths.Profiles)
 	if err != nil {
 		return listMenu{}, err
 	}
@@ -539,6 +642,20 @@ func profileDescriptions(profiles map[string]profile.Profile) map[string]string 
 		descriptions[name] = item.Description
 	}
 	return descriptions
+}
+
+func menuHasMissingCurrentProfile(menu listMenu) bool {
+	if menu.currentName == "" {
+		return false
+	}
+
+	for _, name := range menu.profiles {
+		if name == menu.currentName {
+			return false
+		}
+	}
+
+	return true
 }
 
 type profileFlags struct {
@@ -678,7 +795,7 @@ func parseProfileFlags(args []string, requireName bool) (string, profileFlags, e
 	name := ""
 	flagArgs := args
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		name = args[0]
+		name = normalizeProfileName(args[0])
 		flagArgs = args[1:]
 	}
 
@@ -703,6 +820,10 @@ func parseProfileFlags(args []string, requireName bool) (string, profileFlags, e
 	}
 
 	return name, input, nil
+}
+
+func normalizeProfileName(name string) string {
+	return strings.TrimSpace(name)
 }
 
 func buildProfileEnv(input profileFlags, existing map[string]string) map[string]string {
@@ -917,12 +1038,18 @@ func runRemove(paths Paths, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	if err := profile.Remove(paths.Profiles, args[0]); err != nil {
+	name := normalizeProfileName(args[0])
+	if name == "" {
+		_, _ = io.WriteString(stderr, "必须提供配置名称\n")
+		return 1
+	}
+
+	if err := profile.Remove(paths.Profiles, name); err != nil {
 		_, _ = fmt.Fprintf(stderr, "%s\n", formatCLIError(err))
 		return 1
 	}
 
-	_, _ = fmt.Fprintf(stdout, "已删除配置：%s\n", args[0])
+	_, _ = fmt.Fprintf(stdout, "已删除配置：%s\n", name)
 	return 0
 }
 
@@ -932,12 +1059,19 @@ func runRename(paths Paths, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	if err := profile.Rename(paths.Profiles, args[0], args[1]); err != nil {
+	oldName := normalizeProfileName(args[0])
+	newName := normalizeProfileName(args[1])
+	if oldName == "" || newName == "" {
+		_, _ = io.WriteString(stderr, "必须提供旧配置名称和新配置名称\n")
+		return 1
+	}
+
+	if err := profile.Rename(paths.Profiles, oldName, newName); err != nil {
 		_, _ = fmt.Fprintf(stderr, "%s\n", formatCLIError(err))
 		return 1
 	}
 
-	_, _ = fmt.Fprintf(stdout, "已将配置 %s 重命名为 %s\n", args[0], args[1])
+	_, _ = fmt.Fprintf(stdout, "已将配置 %s 重命名为 %s\n", oldName, newName)
 	return 0
 }
 

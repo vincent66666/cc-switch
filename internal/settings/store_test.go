@@ -105,6 +105,61 @@ func TestWriteEnv_CreatesBackupBeforeWrite(t *testing.T) {
 	}
 }
 
+func TestWriteEnv_CreatesDistinctBackupsForWritesInSameSecond(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	t.Setenv("HOME", dir)
+
+	if err := os.WriteFile(path, []byte(`{"env":{"ANTHROPIC_AUTH_TOKEN":"old-token","ANTHROPIC_BASE_URL":"https://old.example.com"}}`), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	now := func() time.Time {
+		return time.Date(2026, 3, 13, 15, 1, 2, 0, time.UTC)
+	}
+
+	if err := WriteEnv(path, map[string]string{
+		"ANTHROPIC_AUTH_TOKEN": "demo-token",
+		"ANTHROPIC_BASE_URL":   "https://demo.example.com",
+	}, now); err != nil {
+		t.Fatalf("first write env failed: %v", err)
+	}
+
+	if err := WriteEnv(path, map[string]string{
+		"ANTHROPIC_AUTH_TOKEN": "beta-token",
+		"ANTHROPIC_BASE_URL":   "https://beta.example.com",
+	}, now); err != nil {
+		t.Fatalf("second write env failed: %v", err)
+	}
+
+	backupDir := filepath.Join(dir, ".claude", "cc-switch", "backups")
+	entries, err := os.ReadDir(backupDir)
+	if err != nil {
+		t.Fatalf("read backup dir: %v", err)
+	}
+
+	if len(entries) != 2 {
+		t.Fatalf("expected two backups for same-second writes, got %d", len(entries))
+	}
+
+	contents := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		backupContent, err := os.ReadFile(filepath.Join(backupDir, entry.Name()))
+		if err != nil {
+			t.Fatalf("read backup %s: %v", entry.Name(), err)
+		}
+		contents[string(backupContent)] = true
+	}
+
+	if !contents[`{"env":{"ANTHROPIC_AUTH_TOKEN":"old-token","ANTHROPIC_BASE_URL":"https://old.example.com"}}`] {
+		t.Fatalf("expected backups to include original settings, got %#v", contents)
+	}
+
+	if !contents["{\n  \"env\": {\n    \"ANTHROPIC_AUTH_TOKEN\": \"demo-token\",\n    \"ANTHROPIC_BASE_URL\": \"https://demo.example.com\"\n  }\n}\n"] {
+		t.Fatalf("expected backups to include intermediate settings, got %#v", contents)
+	}
+}
+
 func TestWriteEnv_InvalidJSONFailsWithoutMutation(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")

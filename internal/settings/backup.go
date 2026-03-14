@@ -23,11 +23,32 @@ func BackupFile(path string, now func() time.Time) (string, error) {
 		return "", err
 	}
 
-	name := fmt.Sprintf("%s.%s.bak", filepath.Base(path), now().UTC().Format("20060102T150405Z"))
-	backupPath := filepath.Join(backupDir, name)
-	if err := os.WriteFile(backupPath, content, 0o644); err != nil {
-		return "", err
-	}
+	baseName := fmt.Sprintf("%s.%s", filepath.Base(path), now().UTC().Format("20060102T150405Z"))
+	for attempt := 0; ; attempt++ {
+		name := baseName + ".bak"
+		if attempt > 0 {
+			name = fmt.Sprintf("%s.%d.bak", baseName, attempt)
+		}
 
-	return backupPath, nil
+		backupPath := filepath.Join(backupDir, name)
+		file, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
+			if os.IsExist(err) {
+				continue
+			}
+			return "", err
+		}
+
+		if _, err := file.Write(content); err != nil {
+			file.Close()
+			_ = os.Remove(backupPath)
+			return "", err
+		}
+		if err := file.Close(); err != nil {
+			_ = os.Remove(backupPath)
+			return "", err
+		}
+
+		return backupPath, nil
+	}
 }

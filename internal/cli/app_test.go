@@ -142,6 +142,52 @@ func TestRun_UseUpdatesSettingsEnvAndCurrentProfile(t *testing.T) {
 	}
 }
 
+func TestRun_UseRecoversFromMissingCurrentProfile(t *testing.T) {
+	profilesPath := writeRawProfilesFixture(t, `{
+  "version": 1,
+  "current": "ghost",
+  "profiles": {
+    "demo": {
+      "env": {
+        "ANTHROPIC_AUTH_TOKEN": "token-demo",
+        "ANTHROPIC_BASE_URL": "https://demo.example.com"
+      }
+    },
+    "beta": {
+      "env": {
+        "ANTHROPIC_AUTH_TOKEN": "token-beta",
+        "ANTHROPIC_BASE_URL": "https://beta.example.com"
+      }
+    }
+  }
+}
+`)
+	settingsPath := writeSettingsFixture(t, `{"env":{"ANTHROPIC_AUTH_TOKEN":"old-token"}}`)
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+	t.Setenv("CC_SWITCH_SETTINGS_PATH", settingsPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"use", "demo"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	if got := stdout.String(); got != "已切换到配置：demo\n" {
+		t.Fatalf("expected switch success output, got %q", got)
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after recovery switch: %v", err)
+	}
+	if savedProfiles.Current != "demo" {
+		t.Fatalf("expected recovered current profile demo, got %q", savedProfiles.Current)
+	}
+}
+
 func TestRun_UseDoesNotAdvanceCurrentWhenSettingsWriteFails(t *testing.T) {
 	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
 		Version: 1,
@@ -181,6 +227,48 @@ func TestRun_UseDoesNotAdvanceCurrentWhenSettingsWriteFails(t *testing.T) {
 
 	if savedProfiles.Current != "beta" {
 		t.Fatalf("expected current profile to remain beta, got %q", savedProfiles.Current)
+	}
+}
+
+func TestRun_UseTrimsNameArgument(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "beta",
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+		},
+	})
+	settingsPath := writeSettingsFixture(t, `{"env":{"ANTHROPIC_AUTH_TOKEN":"old-token"}}`)
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+	t.Setenv("CC_SWITCH_SETTINGS_PATH", settingsPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"use", " demo "}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected use with spaced name to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after trimmed-name use: %v", err)
+	}
+
+	if savedProfiles.Current != "demo" {
+		t.Fatalf("expected trimmed-name use to switch to demo, got %q", savedProfiles.Current)
 	}
 }
 
@@ -227,6 +315,61 @@ func TestRun_AddPersistsProfile(t *testing.T) {
 
 	if saved.Env["ANTHROPIC_MODEL"] != "glm-5" {
 		t.Fatalf("expected model to persist, got %q", saved.Env["ANTHROPIC_MODEL"])
+	}
+}
+
+func TestRun_AddTrimsNameArgumentAndRejectsNormalizedDuplicate(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version:  1,
+		Profiles: map[string]profile.Profile{},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var firstStdout bytes.Buffer
+	var firstStderr bytes.Buffer
+
+	firstExitCode := Run([]string{
+		"add",
+		" demo ",
+		"--token", "token-demo",
+		"--base-url", "https://demo.example.com",
+	}, &firstStdout, &firstStderr)
+	if firstExitCode != 0 {
+		t.Fatalf("expected trimmed-name add to succeed, got %d, stderr=%q", firstExitCode, firstStderr.String())
+	}
+
+	if got := firstStdout.String(); got != "已添加配置：demo\n" {
+		t.Fatalf("expected normalized add success output, got %q", got)
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after trimmed-name add: %v", err)
+	}
+
+	if _, exists := savedProfiles.Profiles["demo"]; !exists {
+		t.Fatalf("expected normalized profile name to be stored, got %#v", savedProfiles.Profiles)
+	}
+	if _, exists := savedProfiles.Profiles[" demo "]; exists {
+		t.Fatalf("expected spaced profile name to be rejected, got %#v", savedProfiles.Profiles)
+	}
+
+	var duplicateStdout bytes.Buffer
+	var duplicateStderr bytes.Buffer
+
+	duplicateExitCode := Run([]string{
+		"add",
+		"demo",
+		"--token", "token-duplicate",
+		"--base-url", "https://duplicate.example.com",
+	}, &duplicateStdout, &duplicateStderr)
+	if duplicateExitCode == 0 {
+		t.Fatal("expected normalized duplicate add to fail")
+	}
+
+	if got := duplicateStderr.String(); got != "配置 \"demo\" 已存在\n" {
+		t.Fatalf("expected normalized duplicate error, got %q", got)
 	}
 }
 
@@ -284,6 +427,44 @@ func TestRun_EditUpdatesExistingProfile(t *testing.T) {
 
 	if saved.Env["ANTHROPIC_MODEL"] != "glm-5" {
 		t.Fatalf("expected model to update, got %q", saved.Env["ANTHROPIC_MODEL"])
+	}
+}
+
+func TestRun_EditTrimsNameArgument(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Description: "Old description",
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-old",
+					profile.EnvBaseURL:   "https://old.example.com",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{
+		"edit",
+		" demo ",
+		"--description", "New description",
+	}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected edit with spaced name to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after trimmed-name edit: %v", err)
+	}
+
+	if savedProfiles.Profiles["demo"].Description != "New description" {
+		t.Fatalf("expected trimmed-name edit to update demo, got %#v", savedProfiles.Profiles["demo"])
 	}
 }
 
@@ -932,6 +1113,94 @@ func TestRun_UseDoesNotAdvanceCurrentWhenBackupDirUnwritable(t *testing.T) {
 	}
 }
 
+func TestRun_UseRollsBackSettingsWhenUpdatingCurrentFails(t *testing.T) {
+	root := t.TempDir()
+	profilesDir := filepath.Join(root, "profiles")
+	if err := os.MkdirAll(profilesDir, 0o755); err != nil {
+		t.Fatalf("create profiles dir: %v", err)
+	}
+
+	profilesPath := filepath.Join(profilesDir, "profiles.json")
+	if err := profile.Save(profilesPath, profile.ProfilesFile{
+		Version: 1,
+		Current: "beta",
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("save profiles fixture: %v", err)
+	}
+
+	settingsPath := writeSettingsFixture(t, `{
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "old-token",
+    "ANTHROPIC_BASE_URL": "https://old.example.com"
+  }
+}
+`)
+
+	if err := os.Chmod(profilesDir, 0o555); err != nil {
+		t.Fatalf("make profiles dir read-only: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(profilesDir, 0o755)
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+	t.Setenv("CC_SWITCH_SETTINGS_PATH", settingsPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"use", "demo"}, &stdout, &stderr)
+	if exitCode == 0 {
+		t.Fatal("expected use to fail when updating current profile cannot persist")
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after failed use: %v", err)
+	}
+
+	if savedProfiles.Current != "beta" {
+		t.Fatalf("expected current profile to remain beta, got %q", savedProfiles.Current)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings after failed use: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(content, &got); err != nil {
+		t.Fatalf("unmarshal settings after failed use: %v", err)
+	}
+
+	env, ok := got["env"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected env object, got %#v", got["env"])
+	}
+
+	if env[profile.EnvAuthToken] != "old-token" {
+		t.Fatalf("expected settings token to roll back, got %#v", env[profile.EnvAuthToken])
+	}
+
+	if env[profile.EnvBaseURL] != "https://old.example.com" {
+		t.Fatalf("expected settings base url to roll back, got %#v", env[profile.EnvBaseURL])
+	}
+}
+
 func TestRun_CustomPathsSupportAddUseAndCurrentFlow(t *testing.T) {
 	root := t.TempDir()
 	profilesPath := filepath.Join(root, "custom", "profiles.json")
@@ -1114,6 +1383,46 @@ func TestRun_RemoveDeletesNonCurrentProfile(t *testing.T) {
 	}
 }
 
+func TestRun_RemoveTrimsNameArgument(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"remove", " beta "}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected remove with spaced name to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after trimmed-name remove: %v", err)
+	}
+
+	if _, exists := savedProfiles.Profiles["beta"]; exists {
+		t.Fatalf("expected trimmed-name remove to delete beta, got %#v", savedProfiles.Profiles)
+	}
+}
+
 func TestRun_RenameMovesProfileAndCurrentPointer(t *testing.T) {
 	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
 		Version: 1,
@@ -1158,6 +1467,47 @@ func TestRun_RenameMovesProfileAndCurrentPointer(t *testing.T) {
 
 	if savedProfiles.Profiles["prod"].Description != "Demo" {
 		t.Fatalf("expected profile data to survive rename, got %#v", savedProfiles.Profiles["prod"])
+	}
+}
+
+func TestRun_RenameTrimsNameArguments(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "beta",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Description: "Beta",
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"rename", " beta ", " prod "}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected rename with spaced names to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after trimmed-name rename: %v", err)
+	}
+
+	if savedProfiles.Current != "prod" {
+		t.Fatalf("expected trimmed-name rename to move current to prod, got %q", savedProfiles.Current)
+	}
+	if _, exists := savedProfiles.Profiles["beta"]; exists {
+		t.Fatalf("expected trimmed-name rename to remove beta, got %#v", savedProfiles.Profiles)
+	}
+	if _, exists := savedProfiles.Profiles["prod"]; !exists {
+		t.Fatalf("expected trimmed-name rename to create prod, got %#v", savedProfiles.Profiles)
 	}
 }
 
@@ -1643,6 +1993,210 @@ func TestRun_CurrentPrintsCurrentProfile(t *testing.T) {
 	}
 }
 
+func TestRun_CurrentPrintsUnknownWhenProfilesFileIsMissing(t *testing.T) {
+	t.Setenv("CC_SWITCH_PROFILES_PATH", filepath.Join(t.TempDir(), "profiles.json"))
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"current"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+
+	if got := stdout.String(); got != "未知\n" {
+		t.Fatalf("expected missing profiles file to print unknown, got %q", got)
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("expected empty stderr, got %q", got)
+	}
+}
+
+func TestRun_CurrentPrintsUnknownWhenCurrentProfileIsMissing(t *testing.T) {
+	profilesPath := filepath.Join(t.TempDir(), "profiles.json")
+	content := `{
+  "version": 1,
+  "current": "ghost",
+  "profiles": {
+    "demo": {
+      "env": {
+        "ANTHROPIC_AUTH_TOKEN": "token",
+        "ANTHROPIC_BASE_URL": "https://example.com"
+      }
+    }
+  }
+}
+`
+	if err := os.WriteFile(profilesPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write profiles fixture: %v", err)
+	}
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"current"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+
+	if got := stdout.String(); got != "未知\n" {
+		t.Fatalf("expected missing current profile to print unknown, got %q", got)
+	}
+}
+
+func TestRun_CurrentReportsLoadErrorWhenProfilesFileIsInvalid(t *testing.T) {
+	profilesPath := writeRawProfilesFixture(t, "{")
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"current"}, &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("expected exit code 1, got %d", exitCode)
+	}
+
+	if got := stdout.String(); got != "" {
+		t.Fatalf("expected empty stdout, got %q", got)
+	}
+	if got := stderr.String(); !strings.Contains(got, "加载配置失败：") {
+		t.Fatalf("expected load error stderr, got %q", got)
+	}
+}
+
+func TestRun_StatusPrintsUnknownWhenCurrentProfileIsMissing(t *testing.T) {
+	profilesPath := writeRawProfilesFixture(t, `{
+  "version": 1,
+  "current": "ghost",
+  "profiles": {
+    "demo": {
+      "env": {
+        "ANTHROPIC_AUTH_TOKEN": "token",
+        "ANTHROPIC_BASE_URL": "https://example.com"
+      }
+    }
+  }
+}
+`)
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"status"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+
+	if got := stdout.String(); got != "当前配置：未知\n" {
+		t.Fatalf("expected missing current profile to print unknown status, got %q", got)
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("expected empty stderr, got %q", got)
+	}
+}
+
+func TestRun_StatusReportsLoadErrorWhenProfilesFileIsInvalid(t *testing.T) {
+	profilesPath := writeRawProfilesFixture(t, "{")
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"status"}, &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("expected exit code 1, got %d", exitCode)
+	}
+
+	if got := stdout.String(); got != "" {
+		t.Fatalf("expected empty stdout, got %q", got)
+	}
+	if got := stderr.String(); !strings.Contains(got, "加载配置失败：") {
+		t.Fatalf("expected load error stderr, got %q", got)
+	}
+}
+
+func TestRun_ListPrintsNothingWhenProfilesFileIsMissing(t *testing.T) {
+	t.Setenv("CC_SWITCH_PROFILES_PATH", filepath.Join(t.TempDir(), "profiles.json"))
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"list"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+
+	if got := stdout.String(); got != "" {
+		t.Fatalf("expected empty stdout, got %q", got)
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("expected empty stderr, got %q", got)
+	}
+}
+
+func TestRun_ListPrintsProfilesWhenCurrentProfileIsMissing(t *testing.T) {
+	profilesPath := writeRawProfilesFixture(t, `{
+  "version": 1,
+  "current": "ghost",
+  "profiles": {
+    "beta": {
+      "description": "测试环境",
+      "env": {
+        "ANTHROPIC_AUTH_TOKEN": "token-b",
+        "ANTHROPIC_BASE_URL": "https://beta.example.com"
+      }
+    },
+    "demo": {
+      "description": "正式环境",
+      "env": {
+        "ANTHROPIC_AUTH_TOKEN": "token-a",
+        "ANTHROPIC_BASE_URL": "https://example.com"
+      }
+    }
+  }
+}
+`)
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"list"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	if got := stdout.String(); got != "beta - 测试环境\ndemo - 正式环境\n" {
+		t.Fatalf("expected sorted profile list despite missing current, got %q", got)
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("expected empty stderr, got %q", got)
+	}
+}
+
+func TestRun_ListReportsLoadErrorWhenProfilesFileIsInvalid(t *testing.T) {
+	profilesPath := writeRawProfilesFixture(t, "{")
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"list"}, &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("expected exit code 1, got %d", exitCode)
+	}
+
+	if got := stdout.String(); got != "" {
+		t.Fatalf("expected empty stdout, got %q", got)
+	}
+	if got := stderr.String(); !strings.Contains(got, "加载配置失败：") {
+		t.Fatalf("expected load error stderr, got %q", got)
+	}
+}
+
 func TestRun_ListPrintsProfiles(t *testing.T) {
 	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
 		Version: 1,
@@ -1956,6 +2510,56 @@ func TestRun_ListInteractiveSwitchesSelectedProfile(t *testing.T) {
 	}
 	if savedProfiles.Current != "prod" {
 		t.Fatalf("expected current profile to switch to prod, got %q", savedProfiles.Current)
+	}
+}
+
+func TestRun_ListInteractiveSwitchesSelectedProfileWhenCurrentProfileIsMissing(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeRawProfilesFixture(t, `{
+  "version": 1,
+  "current": "ghost",
+  "profiles": {
+    "beta": {
+      "env": {
+        "ANTHROPIC_AUTH_TOKEN": "token-beta",
+        "ANTHROPIC_BASE_URL": "https://beta.example.com"
+      }
+    },
+    "demo": {
+      "env": {
+        "ANTHROPIC_AUTH_TOKEN": "token-demo",
+        "ANTHROPIC_BASE_URL": "https://demo.example.com"
+      }
+    }
+  }
+}
+`)
+	settingsPath := writeSettingsFixture(t, `{"env":{"ANTHROPIC_AUTH_TOKEN":"old-token"}}`)
+
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, "\rq", map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+		"CC_SWITCH_SETTINGS_PATH": settingsPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected interactive recovery switch to succeed, output=%q", output)
+	}
+
+	if !strings.Contains(output, "配置列表：") {
+		t.Fatalf("expected list output before recovery switch, got %q", output)
+	}
+	if strings.Contains(output, "操作：") {
+		t.Fatalf("expected degraded interactive list to bypass action menu, got %q", output)
+	}
+	if !strings.Contains(output, "已切换到配置：beta") {
+		t.Fatalf("expected recovery switch success output, got %q", output)
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after interactive recovery switch: %v", err)
+	}
+	if savedProfiles.Current != "beta" {
+		t.Fatalf("expected recovered current profile beta, got %q", savedProfiles.Current)
 	}
 }
 
@@ -2610,6 +3214,17 @@ func writeProfilesFixture(t *testing.T, data profile.ProfilesFile) string {
 
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("fixture missing: %v", err)
+	}
+
+	return path
+}
+
+func writeRawProfilesFixture(t *testing.T, content string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "profiles.json")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write raw profiles fixture: %v", err)
 	}
 
 	return path

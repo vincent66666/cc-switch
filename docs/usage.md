@@ -91,6 +91,12 @@ go build -o cc-switch .
 
 任何不在白名单中的字段都不会被保存在 profile 中。导入旧 `.env` 时也会被忽略。
 
+### 4.4 `profiles.json` 读写规则
+
+- profile 名称和 `current` 在读写时都会自动去掉首尾空白
+- 如果规范化后发生重名，例如 `"demo"` 和 `" demo "`，读写都会直接失败
+- 除了 `list` 的宽松读取路径外，`current` 指向不存在的 profile 会被视为配置错误
+
 ## 5. 命令说明
 
 ### 5.1 `cc-switch`
@@ -112,6 +118,18 @@ cc-switch
 
 当前实现里，只有在 macOS/Darwin 上运行，并且 stdin/stdout 都连接到交互终端、同时存在其他可切换的 profile 时，才会显示一个可用 `↑/↓` 选择、按 `Enter` 直接切换、按 `q` 或 `Ctrl+C` 退出的列表。其他平台或非 TTY 场景会继续输出上面的纯文本结果。
 
+如果 `profiles.json` 不存在，或者当前 profile 不存在，输出会退化为：
+
+```text
+当前配置：未知
+```
+
+如果 `profiles.json` 本身损坏，或者规范化后出现重名冲突，则会输出类似：
+
+```text
+加载配置失败：...
+```
+
 ### 5.2 `cc-switch current`
 
 显示当前 profile 名称。
@@ -124,6 +142,18 @@ cc-switch current
 
 ```text
 demo
+```
+
+如果 `profiles.json` 不存在，或者 `current` 为空、或者指向一个不存在的 profile，则输出：
+
+```text
+未知
+```
+
+如果 `profiles.json` 本身损坏，或者规范化后出现重名冲突，则会输出类似：
+
+```text
+加载配置失败：...
 ```
 
 ### 5.3 `cc-switch list`
@@ -143,6 +173,12 @@ prod
 ```
 
 当前实现里，只有在 macOS/Darwin 上运行，并且 stdin/stdout 都连接到交互终端时，`cc-switch list` 才会显示一个可上下选择的列表。按 `Enter` 后会进入 `切换 / 修改 / 删除 / 返回` 菜单，按 `q` 或 `Ctrl+C` 退出。其他平台或非 TTY 场景会保持上面的纯文本输出。
+
+补充说明：
+
+- 如果 `profiles.json` 不存在，`list` 会输出空结果并返回成功
+- 如果 `current` 指向一个不存在的 profile，`list` 仍会继续列出所有可用 profile
+- 如果 `profiles.json` 本身损坏，或者规范化后出现重名冲突，则会输出 `加载配置失败：...`
 
 ### 5.4 `cc-switch use <name>`
 
@@ -168,6 +204,8 @@ cc-switch use demo
 6. 原子写回 `settings.json`
 7. 更新 `profiles.json.current`
 
+如果写入后的 `current` 指向不存在的 profile，或者 `profiles.json` 本身存在规范化冲突，切换会失败，不会把坏状态保存回去。
+
 ### 5.5 `cc-switch add <name>`
 
 新增 profile。
@@ -192,7 +230,7 @@ cc-switch add demo \
 成功输出：
 
 ```text
-added demo
+已添加配置：demo
 ```
 
 交互模式下会按这个顺序询问：
@@ -211,6 +249,7 @@ added demo
 - 已通过参数提供的字段不会再问
 - `description` 和 4 个 model 字段可直接回车留空
 - `token` 和 `base-url` 不能为空
+- 命令行参数里的 profile 名称会自动去掉首尾空白
 - 如果交互输入的 `name` 已存在，命令会立即报错退出，不继续询问后续字段
 - 非交互环境下缺少必填字段会直接报错，不进入提问流程
 
@@ -228,7 +267,7 @@ cc-switch edit demo \
 成功输出：
 
 ```text
-updated demo
+已更新配置：demo
 ```
 
 如果在交互终端里执行 `cc-switch edit demo`，会按这个顺序逐项询问：
@@ -248,6 +287,7 @@ updated demo
 - `token` 只显示掩码值，不回显完整 token
 - 已通过参数提供的字段不会再问
 - 如果某个可选 model 字段原本不存在，回车后仍保持“不写这个 key”
+- 命令行参数里的 profile 名称会自动去掉首尾空白
 - `name` 不通过 `edit` 修改，改名继续用 `rename`
 
 ### 5.7 `cc-switch remove <name>`
@@ -261,13 +301,13 @@ cc-switch remove beta
 成功输出：
 
 ```text
-removed beta
+已删除配置：beta
 ```
 
 如果目标是当前 profile，会失败：
 
 ```text
-cannot remove the active profile
+不能删除当前正在使用的配置
 ```
 
 ### 5.8 `cc-switch rename <old> <new>`
@@ -281,10 +321,10 @@ cc-switch rename demo prod
 成功输出：
 
 ```text
-renamed demo to prod
+已将配置 demo 重命名为 prod
 ```
 
-如果被重命名的是当前 profile，`current` 也会同步更新。
+如果被重命名的是当前 profile，`current` 也会同步更新。命令行参数里的旧名称和新名称都会自动去掉首尾空白。
 
 ## 6. `settings.json` 更新规则
 
@@ -311,6 +351,12 @@ renamed demo to prod
 ~/.claude/cc-switch/backups/settings.json.20260313T150102Z.bak
 ```
 
+如果同一秒里已经存在同名时间戳备份，后续备份会自动递增，例如：
+
+```text
+~/.claude/cc-switch/backups/settings.json.20260313T150102Z.1.bak
+```
+
 如果 `settings.json` 不存在：
 
 - 不会先生成旧文件备份
@@ -321,33 +367,55 @@ renamed demo to prod
 ### 8.1 profile 不存在
 
 ```text
-profile "demo" not found
+未找到配置 "demo"
 ```
 
 ### 8.2 缺少必填字段
 
 ```text
-profile "demo" missing required field: ANTHROPIC_BASE_URL
+配置 "demo" 缺少必填字段：ANTHROPIC_BASE_URL
 ```
 
 或者：
 
 ```text
-missing required field: ANTHROPIC_AUTH_TOKEN
+缺少必填字段：ANTHROPIC_AUTH_TOKEN
 ```
 
 ### 8.3 `settings.json` 非法
 
 ```text
-write settings env: invalid character ...
+写入 settings.json 的 env 失败：invalid character ...
 ```
 
-此时不会继续写入，也不会推进当前 profile。
+此时不会继续写入，也不会推进当前 profile。如果 `settings.json` 已经写入成功、但更新 `current` 失败，工具会回滚刚刚写入的 `settings.json`。
 
-### 8.4 命令不存在
+### 8.4 `profiles.json` 非法或不一致
+
+例如：
 
 ```text
-unknown command: foo
+加载配置失败：invalid character ...
+```
+
+或者：
+
+```text
+加载配置失败：配置 "demo" 已存在
+```
+
+或者：
+
+```text
+加载配置失败：当前配置 "ghost" 不存在
+```
+
+这类错误通常表示 `profiles.json` 本身损坏、规范化后重名，或者 `current` 指针指向了不存在的 profile。`current/status` 会只在“缺文件”或“悬空 current”这两类可降级场景下输出 `未知`；其余读取错误会直接报错。
+
+### 8.5 命令不存在
+
+```text
+未知命令：foo
 ```
 
 ## 9. 推荐操作流程
@@ -386,15 +454,23 @@ unknown command: foo
 - `edit` 中已通过参数提供的字段，应跳过交互提问
 - `edit` 中短 token 的当前值应显示为掩码 `****`
 - `edit` 中原本不存在的可选 model 字段，回车后不应写入空 key
+- `add/edit/use/remove/rename` 的命令行 profile 名称参数会自动修剪首尾空白
 - 备份目录不可写时，`use` 失败且 `current` 不推进
+- 更新 `current` 失败时，`use` 会回滚刚写入的 `settings.json`
+- 同一秒内连续备份不会覆盖之前的备份文件
+- `current` 指向不存在的 profile 时，`cc-switch current` / `cc-switch status` 会输出 `未知`
+- `profiles.json` 不存在时，`cc-switch list` 会输出空结果而不是报错
+- `profiles.json` 规范化后重名或 JSON 损坏时，`current/status/list` 会输出 `加载配置失败：...`
 - 自定义 `CC_SWITCH_PROFILES_PATH` / `CC_SWITCH_SETTINGS_PATH` 下的 `add -> use -> current` 流程可正常工作
 
 ## 12. 建议继续补测
 
 建议后续继续补下面这些自动化或人工回归场景：
 
-- `cc-switch use <name>` 在备份目录不可写时，是否能稳定回滚
+- `settings.json` 原本不存在、随后 `current` 更新失败时，是否能稳定删除刚创建的临时配置文件
 - 真实终端环境下长 token、短 token、空 token 的提示体验是否一致
+- 真实终端环境下，带空白名称参数的 `use/remove/rename` 交互提示是否符合预期
+- 交互式 `list` 在 `current` 悬空时是否完全不高亮任何项
 - `settings.json` 很大、包含复杂插件配置时，格式化重写是否仍符合预期
 
 ## 13. 相关文档
