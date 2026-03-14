@@ -13,37 +13,38 @@ type statusSelector struct {
 }
 
 func (s *statusSelector) moveUp() {
-	if len(s.names) == 0 {
+	if len(s.orderedNames()) == 0 {
 		return
 	}
 
 	s.index--
 	if s.index < 0 {
-		s.index = len(s.names) - 1
+		s.index = len(s.orderedNames()) - 1
 	}
 }
 
 func (s *statusSelector) moveDown() {
-	if len(s.names) == 0 {
+	if len(s.orderedNames()) == 0 {
 		return
 	}
 
 	s.index++
-	if s.index >= len(s.names) {
+	if s.index >= len(s.orderedNames()) {
 		s.index = 0
 	}
 }
 
 func (s statusSelector) selectedName() string {
-	if len(s.names) == 0 {
+	names := s.orderedNames()
+	if len(names) == 0 {
 		return ""
 	}
 
-	if s.index < 0 || s.index >= len(s.names) {
+	if s.index < 0 || s.index >= len(names) {
 		return ""
 	}
 
-	return s.names[s.index]
+	return names[s.index]
 }
 
 func (s statusSelector) render() string {
@@ -57,19 +58,44 @@ func (s statusSelector) render() string {
 	out.WriteString("接口地址：" + s.baseURL + "\n")
 	out.WriteString("模型：" + model + "\n")
 
-	if len(s.names) == 0 {
+	names := s.orderedNames()
+	if len(names) == 0 {
 		return out.String()
 	}
 
 	out.WriteString("可用配置：\n")
-	for i, name := range s.names {
+	for i, name := range names {
 		prefix := "  "
 		if i == s.index {
 			prefix = "> "
 		}
-		out.WriteString(prefix + name + "\n")
+		out.WriteString(prefix + s.displayName(name) + "\n")
 	}
 
 	out.WriteString(interactiveQuitHint + "\n")
 	return out.String()
+}
+
+func (s statusSelector) orderedNames() []string {
+	names := make([]string, 0, len(s.names)+1)
+	if s.currentName != "" {
+		names = append(names, s.currentName)
+	}
+
+	for _, name := range s.names {
+		if name == s.currentName {
+			continue
+		}
+		names = append(names, name)
+	}
+
+	return names
+}
+
+func (s statusSelector) displayName(name string) string {
+	if name == s.currentName {
+		return name + "（当前）"
+	}
+
+	return name
 }

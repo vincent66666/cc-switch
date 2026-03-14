@@ -1208,7 +1208,7 @@ func TestRun_StatusInteractiveArrowSelectionSwitchesProfile(t *testing.T) {
 	})
 	settingsPath := writeSettingsFixture(t, `{"env":{"ANTHROPIC_AUTH_TOKEN":"old-token"}}`)
 
-	exitCode, output := runWithTTYBestEffort(t, scriptPath, nil, "\x1b[B\r", map[string]string{
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, nil, "\x1b[B\x1b[B\r", map[string]string{
 		"CC_SWITCH_PROFILES_PATH": profilesPath,
 		"CC_SWITCH_SETTINGS_PATH": settingsPath,
 	})
@@ -1901,14 +1901,14 @@ func TestRun_ListInteractiveBackLeavesCurrentUnchanged(t *testing.T) {
 		},
 	})
 
-	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, "\r\x1b[B\x1b[B\x1b[B\rq", map[string]string{
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, "\r\x1b[B\x1b[B\rq", map[string]string{
 		"CC_SWITCH_PROFILES_PATH": profilesPath,
 	})
 	if exitCode != 0 {
 		t.Fatalf("expected interactive list back flow to succeed, output=%q", output)
 	}
 
-	if !strings.Contains(output, "操作：beta") {
+	if !strings.Contains(output, "操作：demo") {
 		t.Fatalf("expected action menu output, got %q", output)
 	}
 	if strings.Contains(output, "已切换到配置：") {
@@ -2017,7 +2017,7 @@ func TestRun_ListInteractiveCurrentProfileActionsHideRemove(t *testing.T) {
 		},
 	})
 
-	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, "\x1b[B\rq", map[string]string{
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, "\rq", map[string]string{
 		"CC_SWITCH_PROFILES_PATH": profilesPath,
 	})
 	if exitCode != 0 {
@@ -2145,7 +2145,7 @@ func TestRun_ListInteractiveEditUpdatesProfileAndReturnsToList(t *testing.T) {
 		},
 	})
 
-	input := "\r\x1b[B\r新描述\n\n\n\n\n\n\nq"
+	input := "\x1b[B\r\x1b[B\r新描述\n\n\n\n\n\n\nq"
 	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, input, map[string]string{
 		"CC_SWITCH_PROFILES_PATH": profilesPath,
 	})
@@ -2188,7 +2188,7 @@ func TestRun_ListInteractiveEditReentersAlternateScreenAfterSuccess(t *testing.T
 		},
 	})
 
-	input := "\r\x1b[B\r新描述\n\n\n\n\n\n\nq"
+	input := "\x1b[B\r\x1b[B\r新描述\n\n\n\n\n\n\nq"
 	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, input, map[string]string{
 		"CC_SWITCH_PROFILES_PATH": profilesPath,
 	})
@@ -2234,7 +2234,7 @@ func TestRun_ListInteractiveRemoveConfirmsAndRefreshesList(t *testing.T) {
 		},
 	})
 
-	input := "\r\x1b[B\x1b[B\r\rq"
+	input := "\x1b[B\r\x1b[B\x1b[B\r\rq"
 	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, input, map[string]string{
 		"CC_SWITCH_PROFILES_PATH": profilesPath,
 	})
@@ -2282,7 +2282,7 @@ func TestRun_ListInteractiveRemoveReentersAlternateScreenAfterSuccess(t *testing
 		},
 	})
 
-	input := "\r\x1b[B\x1b[B\r\rq"
+	input := "\x1b[B\r\x1b[B\x1b[B\r\rq"
 	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, input, map[string]string{
 		"CC_SWITCH_PROFILES_PATH": profilesPath,
 	})

@@ -74,12 +74,13 @@ func (m *listMenu) moveUp() {
 			m.actionIndex = len(m.actions()) - 1
 		}
 	default:
-		if len(m.profiles) == 0 {
+		profiles := m.orderedProfiles()
+		if len(profiles) == 0 {
 			return
 		}
 		m.index--
 		if m.index < 0 {
-			m.index = len(m.profiles) - 1
+			m.index = len(profiles) - 1
 		}
 	}
 }
@@ -97,11 +98,12 @@ func (m *listMenu) moveDown() {
 			m.actionIndex = 0
 		}
 	default:
-		if len(m.profiles) == 0 {
+		profiles := m.orderedProfiles()
+		if len(profiles) == 0 {
 			return
 		}
 		m.index++
-		if m.index >= len(m.profiles) {
+		if m.index >= len(profiles) {
 			m.index = 0
 		}
 	}
@@ -132,10 +134,11 @@ func (m *listMenu) enterDeleteConfirm() {
 }
 
 func (m listMenu) selectedProfile() string {
-	if len(m.profiles) == 0 || m.index < 0 || m.index >= len(m.profiles) {
+	profiles := m.orderedProfiles()
+	if len(profiles) == 0 || m.index < 0 || m.index >= len(profiles) {
 		return ""
 	}
-	return m.profiles[m.index]
+	return profiles[m.index]
 }
 
 func (m listMenu) selectedAction() listMenuAction {
@@ -176,22 +179,56 @@ func (m listMenu) render() string {
 			out.WriteString(prefix + string(action) + "\n")
 		}
 	default:
-		if len(m.profiles) == 0 {
+		profiles := m.orderedProfiles()
+		if len(profiles) == 0 {
 			out.WriteString("配置列表为空\n")
 			out.WriteString(interactiveQuitHint + "\n")
 			return out.String()
 		}
 
 		out.WriteString("配置列表：\n")
-		for i, profile := range m.profiles {
+		for i, profile := range profiles {
 			prefix := "  "
 			if i == m.index {
 				prefix = "> "
 			}
-			out.WriteString(prefix + profile + "\n")
+			out.WriteString(prefix + m.displayProfile(profile) + "\n")
 		}
 	}
 
 	out.WriteString(interactiveQuitHint + "\n")
 	return out.String()
+}
+
+func (m listMenu) orderedProfiles() []string {
+	return prioritizeCurrentProfile(m.profiles, m.currentName)
+}
+
+func (m listMenu) displayProfile(name string) string {
+	if name == m.currentName {
+		return name + "（当前）"
+	}
+
+	return name
+}
+
+func prioritizeCurrentProfile(names []string, current string) []string {
+	ordered := make([]string, 0, len(names))
+	if current != "" {
+		for _, name := range names {
+			if name == current {
+				ordered = append(ordered, current)
+				break
+			}
+		}
+	}
+
+	for _, name := range names {
+		if name == current {
+			continue
+		}
+		ordered = append(ordered, name)
+	}
+
+	return ordered
 }

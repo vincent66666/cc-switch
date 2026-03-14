@@ -21,7 +21,30 @@ func TestStatusSelectorRender(t *testing.T) {
 		"接口地址：https://example.com",
 		"模型：glm-5",
 		"可用配置：",
-		"> beta",
+		"> demo（当前）",
+		"  beta",
+		"  prod",
+	} {
+		if !strings.Contains(rendered, fragment) {
+			t.Fatalf("expected rendered selector to contain %q, got %q", fragment, rendered)
+		}
+	}
+}
+
+func TestStatusSelectorRenderIncludesCurrentProfileFirstAndMarked(t *testing.T) {
+	selector := statusSelector{
+		currentName: "demo",
+		baseURL:     "https://example.com",
+		model:       "glm-5",
+		names:       []string{"beta", "prod"},
+		index:       0,
+	}
+
+	rendered := selector.render()
+
+	for _, fragment := range []string{
+		"> demo（当前）",
+		"  beta",
 		"  prod",
 	} {
 		if !strings.Contains(rendered, fragment) {
@@ -45,6 +68,23 @@ func TestStatusSelectorMoveWrapsAround(t *testing.T) {
 	selector.moveDown()
 	if got := selector.selectedName(); got != "prod" {
 		t.Fatalf("expected move down selection, got %q", got)
+	}
+}
+
+func TestStatusSelectorSelectedNameStartsFromCurrentProfile(t *testing.T) {
+	selector := statusSelector{
+		currentName: "demo",
+		names:       []string{"beta", "prod"},
+		index:       0,
+	}
+
+	if got := selector.selectedName(); got != "demo" {
+		t.Fatalf("expected current profile to be the first selectable item, got %q", got)
+	}
+
+	selector.moveDown()
+	if got := selector.selectedName(); got != "beta" {
+		t.Fatalf("expected move down to reach next profile after current, got %q", got)
 	}
 }
 

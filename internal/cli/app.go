@@ -137,7 +137,10 @@ func runList(paths Paths, stdout, stderr io.Writer) int {
 
 	names := profileNames(data.Profiles)
 	if selectorInteractive(stdout) && len(names) > 0 {
-		return runInteractiveList(paths, listMenu{profiles: names, currentName: data.Current}, stdout, stderr)
+		return runInteractiveList(paths, listMenu{
+			profiles:    prioritizeCurrentProfile(names, data.Current),
+			currentName: data.Current,
+		}, stdout, stderr)
 	}
 
 	return output.RenderList(stdout, names)
@@ -387,7 +390,7 @@ func reloadListMenu(paths Paths, selectedName string, selectedIndex int) (listMe
 	}
 
 	menu := listMenu{
-		profiles:    profileNames(data.Profiles),
+		profiles:    prioritizeCurrentProfile(profileNames(data.Profiles), data.Current),
 		currentName: data.Current,
 	}
 

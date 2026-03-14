@@ -7,17 +7,37 @@ import (
 
 func TestListMenuRenderList(t *testing.T) {
 	menu := listMenu{
-		profiles: []string{"beta", "demo", "prod"},
-		index:    1,
+		profiles:    []string{"beta", "demo", "prod"},
+		currentName: "demo",
+		index:       0,
 	}
 
 	rendered := menu.render()
 
 	for _, fragment := range []string{
 		"配置列表：",
+		"> demo（当前）",
 		"  beta",
-		"> demo",
 		"  prod",
+	} {
+		if !strings.Contains(rendered, fragment) {
+			t.Fatalf("expected list render to contain %q, got %q", fragment, rendered)
+		}
+	}
+}
+
+func TestListMenuRenderKeepsCurrentMarkerWhenSelectionMoves(t *testing.T) {
+	menu := listMenu{
+		profiles:    []string{"demo", "beta", "prod"},
+		currentName: "demo",
+		index:       1,
+	}
+
+	rendered := menu.render()
+
+	for _, fragment := range []string{
+		"  demo（当前）",
+		"> beta",
 	} {
 		if !strings.Contains(rendered, fragment) {
 			t.Fatalf("expected list render to contain %q, got %q", fragment, rendered)
@@ -59,7 +79,7 @@ func TestListMenuCurrentProfileActionsHideRemove(t *testing.T) {
 	menu := listMenu{
 		profiles:    []string{"beta", "demo"},
 		currentName: "demo",
-		index:       1,
+		index:       0,
 	}
 
 	menu.enterActions()
@@ -77,7 +97,7 @@ func TestListMenuCurrentProfileActionsStayFilteredAfterSelectionChanges(t *testi
 	menu := listMenu{
 		profiles:    []string{"beta", "demo", "prod"},
 		currentName: "demo",
-		index:       0,
+		index:       1,
 	}
 
 	menu.enterActions()
@@ -91,7 +111,7 @@ func TestListMenuCurrentProfileActionsStayFilteredAfterSelectionChanges(t *testi
 	}
 
 	menu.backToList()
-	menu.moveDown()
+	menu.moveUp()
 	menu.enterActions()
 	rendered := menu.render()
 	if strings.Contains(rendered, "删除") {
@@ -108,7 +128,7 @@ func TestListMenuNonCurrentProfileStillShowsRemove(t *testing.T) {
 	menu := listMenu{
 		profiles:    []string{"beta", "demo"},
 		currentName: "demo",
-		index:       0,
+		index:       1,
 	}
 
 	menu.enterActions()
