@@ -282,49 +282,7 @@ renamed demo to prod
 
 如果被重命名的是当前 profile，`current` 也会同步更新。
 
-### 5.9 `cc-switch import --from <dir>`
-
-从旧 `.env` 目录导入 profile。
-
-```bash
-cc-switch import --from ~/.claude/profiles
-```
-
-成功输出类似：
-
-```text
-imported=3 skipped=1
-```
-
-允许覆盖同名 profile：
-
-```bash
-cc-switch import --from ~/.claude/profiles --overwrite
-```
-
-## 6. 旧 `.env` 导入格式
-
-支持的旧文件格式示例：
-
-```bash
-# 阿里 coding plan 个人
-export ANTHROPIC_AUTH_TOKEN="token-demo"
-export ANTHROPIC_BASE_URL="https://example.com"
-export ANTHROPIC_MODEL="glm-5"
-export ANTHROPIC_DEFAULT_OPUS_MODEL="glm-5"
-export ANTHROPIC_DEFAULT_SONNET_MODEL="kimi-k2.5"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="MiniMax-M2.5"
-```
-
-导入规则：
-
-- 文件名去掉 `.env` 作为 profile 名称
-- 第一行普通注释作为 `description`
-- 只导入支持的 6 个字段
-- 缺少必填字段的文件会被跳过
-- 默认不覆盖同名 profile，除非加 `--overwrite`
-
-## 7. `settings.json` 更新规则
+## 6. `settings.json` 更新规则
 
 `cc-switch` 最关键的约束是：只更新 `~/.claude/settings.json` 的 `env`。
 
@@ -341,7 +299,7 @@ export ANTHROPIC_DEFAULT_HAIKU_MODEL="MiniMax-M2.5"
 - 整个 `settings.json` 会被重新格式化
 - 所以字段顺序和缩进可能发生变化
 
-## 8. 备份规则
+## 7. 备份规则
 
 每次开始写入 `settings.json` 前，如果原文件存在，会先创建备份：
 
@@ -354,15 +312,15 @@ export ANTHROPIC_DEFAULT_HAIKU_MODEL="MiniMax-M2.5"
 - 不会先生成旧文件备份
 - 会直接创建最小 JSON 对象后写入新的 `env`
 
-## 9. 常见错误
+## 8. 常见错误
 
-### 9.1 profile 不存在
+### 8.1 profile 不存在
 
 ```text
 profile "demo" not found
 ```
 
-### 9.2 缺少必填字段
+### 8.2 缺少必填字段
 
 ```text
 profile "demo" missing required field: ANTHROPIC_BASE_URL
@@ -374,7 +332,7 @@ profile "demo" missing required field: ANTHROPIC_BASE_URL
 missing required field: ANTHROPIC_AUTH_TOKEN
 ```
 
-### 9.3 `settings.json` 非法
+### 8.3 `settings.json` 非法
 
 ```text
 write settings env: invalid character ...
@@ -382,30 +340,30 @@ write settings env: invalid character ...
 
 此时不会继续写入，也不会推进当前 profile。
 
-### 9.4 未提供导入目录
-
-```text
---from is required
-```
-
-### 9.5 命令不存在
+### 8.4 命令不存在
 
 ```text
 unknown command: foo
 ```
 
-## 10. 推荐操作流程
+## 9. 推荐操作流程
 
-1. 如果你有旧 `.env` 配置，执行 `cc-switch import --from <dir>`
-2. 执行 `cc-switch list`
-3. 如果需要手工新增配置，执行 `cc-switch add <name> --token ... --base-url ...`
-4. 按需补模型字段
-5. 执行 `cc-switch use <name>`
-6. 执行 `cc-switch current`
-7. 检查 `~/.claude/settings.json` 的 `env`
-8. 检查 `~/.claude/cc-switch/backups/` 是否生成备份
+### 9.1 首次配置
 
-## 11. 当前限制
+1. 执行 `cc-switch add <name> --token ... --base-url ...`
+2. 按需补模型字段
+3. 执行 `cc-switch use <name>`
+4. 执行 `cc-switch current`
+5. 检查 `~/.claude/settings.json` 的 `env`
+6. 如果原本已存在 `settings.json`，检查 `~/.claude/cc-switch/backups/` 是否生成备份
+
+### 9.2 日常切换
+
+1. `cc-switch list`
+2. `cc-switch use <name>`
+3. `cc-switch current`
+
+## 10. 当前限制
 
 - 只支持 profile 白名单中的 6 个环境变量
 - `add/edit` 只支持逐项文本交互，不支持方向键选择或表单式 UI
@@ -413,7 +371,7 @@ unknown command: foo
 - 目前没有 shell 自动补全
 - 目前没有单独的 `show <name>` 命令
 
-## 12. 已覆盖的边缘用例
+## 11. 已覆盖的边缘用例
 
 当前自动化测试已经覆盖这些交互和校验场景：
 
@@ -427,15 +385,14 @@ unknown command: foo
 - 备份目录不可写时，`use` 失败且 `current` 不推进
 - 自定义 `CC_SWITCH_PROFILES_PATH` / `CC_SWITCH_SETTINGS_PATH` 下的 `add -> use -> current` 流程可正常工作
 
-## 13. 建议继续补测
+## 12. 建议继续补测
 
 建议后续继续补下面这些自动化或人工回归场景：
 
 - `cc-switch use <name>` 在备份目录不可写时，是否能稳定回滚
-- `CC_SWITCH_PROFILES_PATH` / `CC_SWITCH_SETTINGS_PATH` 指向自定义位置时的完整流程
 - 真实终端环境下长 token、短 token、空 token 的提示体验是否一致
 - `settings.json` 很大、包含复杂插件配置时，格式化重写是否仍符合预期
 
-## 14. 相关文档
+## 13. 相关文档
 
 - [README.md](/Users/liuzhiqiang/DevOps/cc-switch/README.md)

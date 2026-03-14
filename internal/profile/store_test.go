@@ -109,3 +109,62 @@ func TestStore_SetCurrentProfile(t *testing.T) {
 		t.Fatalf("expected current demo, got %q", got.Current)
 	}
 }
+
+func TestStore_RemoveRejectsActiveProfile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "profiles.json")
+
+	data := ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]Profile{
+			"demo": {
+				Env: map[string]string{
+					EnvAuthToken: "token",
+					EnvBaseURL:   "https://example.com",
+				},
+			},
+		},
+	}
+
+	if err := Save(path, data); err != nil {
+		t.Fatalf("save fixture: %v", err)
+	}
+
+	err := Remove(path, "demo")
+	if err == nil || err.Error() != "不能删除当前正在使用的配置" {
+		t.Fatalf("expected active-profile remove error, got %v", err)
+	}
+}
+
+func TestStore_RenameRejectsDuplicateName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "profiles.json")
+
+	data := ProfilesFile{
+		Version: 1,
+		Profiles: map[string]Profile{
+			"demo": {
+				Env: map[string]string{
+					EnvAuthToken: "token-demo",
+					EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+			"prod": {
+				Env: map[string]string{
+					EnvAuthToken: "token-prod",
+					EnvBaseURL:   "https://prod.example.com",
+				},
+			},
+		},
+	}
+
+	if err := Save(path, data); err != nil {
+		t.Fatalf("save fixture: %v", err)
+	}
+
+	err := Rename(path, "demo", "prod")
+	if err == nil || err.Error() != "配置 \"prod\" 已存在" {
+		t.Fatalf("expected duplicate rename error, got %v", err)
+	}
+}

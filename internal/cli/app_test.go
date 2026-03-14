@@ -39,6 +39,8 @@ func TestTTYHelperProcess(t *testing.T) {
 }
 
 func TestRun_NoArgsShowsStatus(t *testing.T) {
+	t.Setenv("CC_SWITCH_PROFILES_PATH", filepath.Join(t.TempDir(), "profiles.json"))
+
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -48,7 +50,7 @@ func TestRun_NoArgsShowsStatus(t *testing.T) {
 		t.Fatalf("expected exit code 0, got %d", exitCode)
 	}
 
-	if got := stdout.String(); got != "current: unknown\n" {
+	if got := stdout.String(); got != "当前配置：未知\n" {
 		t.Fatalf("expected status output, got %q", got)
 	}
 
@@ -97,6 +99,10 @@ func TestRun_UseUpdatesSettingsEnvAndCurrentProfile(t *testing.T) {
 	exitCode := Run([]string{"use", "demo"}, &stdout, &stderr)
 	if exitCode != 0 {
 		t.Fatalf("expected exit code 0, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	if got := stdout.String(); got != "已切换到配置：demo\n" {
+		t.Fatalf("expected switch success output, got %q", got)
 	}
 
 	savedProfiles, err := profile.Load(profilesPath)
@@ -201,6 +207,10 @@ func TestRun_AddPersistsProfile(t *testing.T) {
 		t.Fatalf("expected add to succeed, got %d, stderr=%q", exitCode, stderr.String())
 	}
 
+	if got := stdout.String(); got != "已添加配置：demo\n" {
+		t.Fatalf("expected add success output, got %q", got)
+	}
+
 	savedProfiles, err := profile.Load(profilesPath)
 	if err != nil {
 		t.Fatalf("load profiles after add: %v", err)
@@ -248,6 +258,10 @@ func TestRun_EditUpdatesExistingProfile(t *testing.T) {
 	}, &stdout, &stderr)
 	if exitCode != 0 {
 		t.Fatalf("expected edit to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	if got := stdout.String(); got != "已更新配置：demo\n" {
+		t.Fatalf("expected edit success output, got %q", got)
 	}
 
 	savedProfiles, err := profile.Load(profilesPath)
@@ -314,7 +328,7 @@ func TestRun_AddRejectsMissingNameNonInteractive(t *testing.T) {
 		t.Fatal("expected add to fail when name is missing in non-interactive mode")
 	}
 
-	if got := stderr.String(); got != "profile name is required\n" {
+	if got := stderr.String(); got != "必须提供配置名称\n" {
 		t.Fatalf("expected missing name error, got %q", got)
 	}
 }
@@ -339,7 +353,7 @@ func TestRun_AddRejectsMissingBaseURLNonInteractive(t *testing.T) {
 		t.Fatal("expected add to fail when base url is missing in non-interactive mode")
 	}
 
-	if got := stderr.String(); !strings.Contains(got, "missing required field: ANTHROPIC_BASE_URL") {
+	if got := stderr.String(); !strings.Contains(got, "配置 \"demo\" 缺少必填字段：ANTHROPIC_BASE_URL") {
 		t.Fatalf("expected missing base url error, got %q", got)
 	}
 }
@@ -372,7 +386,7 @@ func TestRun_AddRejectsDuplicateName(t *testing.T) {
 		t.Fatal("expected add to fail when profile name already exists")
 	}
 
-	if got := stderr.String(); got != "profile \"demo\" already exists\n" {
+	if got := stderr.String(); got != "配置 \"demo\" 已存在\n" {
 		t.Fatalf("expected duplicate profile error, got %q", got)
 	}
 }
@@ -424,11 +438,11 @@ func TestRun_AddInteractivePromptsForAllFields(t *testing.T) {
 	}
 
 	for _, fragment := range []string{
-		"name: ",
-		"description (optional): ",
-		"ANTHROPIC_AUTH_TOKEN: ",
-		"ANTHROPIC_BASE_URL: ",
-		"ANTHROPIC_MODEL (optional): ",
+		"名称：",
+		"描述（可选）：",
+		"ANTHROPIC_AUTH_TOKEN：",
+		"ANTHROPIC_BASE_URL：",
+		"ANTHROPIC_MODEL（可选）：",
 	} {
 		if !strings.Contains(promptOutput.String(), fragment) {
 			t.Fatalf("expected prompt output to contain %q, got %q", fragment, promptOutput.String())
@@ -461,11 +475,11 @@ func TestRun_AddInteractiveRejectsDuplicateNameBeforeFurtherPrompts(t *testing.T
 		t.Fatal("expected interactive add to fail for duplicate name")
 	}
 
-	if got := stderr.String(); got != "profile \"demo\" already exists\n" {
+	if got := stderr.String(); got != "配置 \"demo\" 已存在\n" {
 		t.Fatalf("expected duplicate name error, got %q", got)
 	}
 
-	if strings.Contains(promptOutput.String(), "description (optional): ") {
+	if strings.Contains(promptOutput.String(), "描述（可选）：") {
 		t.Fatalf("expected duplicate name to stop before prompting other fields, got %q", promptOutput.String())
 	}
 }
@@ -488,7 +502,7 @@ func TestRun_AddInteractiveInterruptedInputFails(t *testing.T) {
 		t.Fatal("expected interactive add to fail when input is interrupted")
 	}
 
-	if got := stderr.String(); got != "EOF\n" {
+	if got := stderr.String(); got != "输入已结束\n" {
 		t.Fatalf("expected EOF error, got %q", got)
 	}
 
@@ -576,7 +590,7 @@ func TestRun_AddRealTTYBlankInputFails(t *testing.T) {
 		t.Fatalf("expected blank input in real TTY add to fail, output=%q", output)
 	}
 
-	if !strings.Contains(output, "missing required field: name") {
+	if !strings.Contains(output, "缺少必填字段：名称") {
 		t.Fatalf("expected missing name message in real TTY add, got %q", output)
 	}
 }
@@ -694,7 +708,7 @@ func TestRun_EditInteractiveBlankOptionalFieldKeepsMissingKey(t *testing.T) {
 		t.Fatalf("expected blank optional model to keep key absent, got %#v", savedProfiles.Profiles["demo"].Env)
 	}
 
-	if !strings.Contains(promptOutput.String(), "ANTHROPIC_MODEL (enter to keep): ") {
+	if !strings.Contains(promptOutput.String(), "ANTHROPIC_MODEL（直接回车保留当前值）：") {
 		t.Fatalf("expected optional model prompt, got %q", promptOutput.String())
 	}
 }
@@ -725,7 +739,7 @@ func TestRun_EditInteractiveInterruptedInputFailsWithoutMutation(t *testing.T) {
 		t.Fatal("expected interactive edit to fail when input is interrupted")
 	}
 
-	if got := stderr.String(); got != "EOF\n" {
+	if got := stderr.String(); got != "输入已结束\n" {
 		t.Fatalf("expected EOF error, got %q", got)
 	}
 
@@ -865,7 +879,7 @@ func TestRun_EditInteractiveMasksShortToken(t *testing.T) {
 		t.Fatalf("expected short token to stay masked, got %q", promptOutput.String())
 	}
 
-	if !strings.Contains(promptOutput.String(), "ANTHROPIC_AUTH_TOKEN [****] (enter to keep): ") {
+	if !strings.Contains(promptOutput.String(), "ANTHROPIC_AUTH_TOKEN [****]（直接回车保留当前值）：") {
 		t.Fatalf("expected short token mask prompt, got %q", promptOutput.String())
 	}
 }
@@ -1050,6 +1064,10 @@ func TestRun_RemoveRejectsCurrentProfile(t *testing.T) {
 	if exitCode == 0 {
 		t.Fatal("expected remove to fail for current profile")
 	}
+
+	if got := stderr.String(); got != "不能删除当前正在使用的配置\n" {
+		t.Fatalf("expected active profile remove error, got %q", got)
+	}
 }
 
 func TestRun_RemoveDeletesNonCurrentProfile(t *testing.T) {
@@ -1080,6 +1098,10 @@ func TestRun_RemoveDeletesNonCurrentProfile(t *testing.T) {
 	exitCode := Run([]string{"remove", "beta"}, &stdout, &stderr)
 	if exitCode != 0 {
 		t.Fatalf("expected remove to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	if got := stdout.String(); got != "已删除配置：beta\n" {
+		t.Fatalf("expected remove success output, got %q", got)
 	}
 
 	savedProfiles, err := profile.Load(profilesPath)
@@ -1117,6 +1139,10 @@ func TestRun_RenameMovesProfileAndCurrentPointer(t *testing.T) {
 		t.Fatalf("expected rename to succeed, got %d, stderr=%q", exitCode, stderr.String())
 	}
 
+	if got := stdout.String(); got != "已将配置 demo 重命名为 prod\n" {
+		t.Fatalf("expected rename success output, got %q", got)
+	}
+
 	savedProfiles, err := profile.Load(profilesPath)
 	if err != nil {
 		t.Fatalf("load profiles after rename: %v", err)
@@ -1135,43 +1161,21 @@ func TestRun_RenameMovesProfileAndCurrentPointer(t *testing.T) {
 	}
 }
 
-func TestRun_ImportLoadsLegacyEnvFiles(t *testing.T) {
-	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
-		Version: 1,
-		Profiles: map[string]profile.Profile{
-			"existing": {
-				Env: map[string]string{
-					profile.EnvAuthToken: "token-existing",
-					profile.EnvBaseURL:   "https://existing.example.com",
-				},
-			},
-		},
-	})
-	importDir := t.TempDir()
-	writeLegacyEnvFixture(t, filepath.Join(importDir, "demo.env"), "# Demo profile\nexport ANTHROPIC_AUTH_TOKEN=\"token-demo\"\nexport ANTHROPIC_BASE_URL=\"https://demo.example.com\"\nexport ANTHROPIC_MODEL=\"glm-5\"\n")
-
-	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
-
+func TestRun_ImportCommandIsUnknown(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	exitCode := Run([]string{"import", "--from", importDir}, &stdout, &stderr)
-	if exitCode != 0 {
-		t.Fatalf("expected import to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	exitCode := Run([]string{"import", "--from", "/tmp/legacy"}, &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("expected import to fail, got %d", exitCode)
 	}
 
-	savedProfiles, err := profile.Load(profilesPath)
-	if err != nil {
-		t.Fatalf("load profiles after import: %v", err)
+	if got := stdout.String(); got != "" {
+		t.Fatalf("expected empty stdout, got %q", got)
 	}
 
-	imported := savedProfiles.Profiles["demo"]
-	if imported.Description != "Demo profile" {
-		t.Fatalf("expected imported description, got %q", imported.Description)
-	}
-
-	if imported.Env["ANTHROPIC_MODEL"] != "glm-5" {
-		t.Fatalf("expected imported model, got %q", imported.Env["ANTHROPIC_MODEL"])
+	if got := stderr.String(); got != "未知命令：import\n" {
+		t.Fatalf("expected unknown command error, got %q", got)
 	}
 }
 
@@ -1273,7 +1277,7 @@ func TestRun_NoArgsShowsBaseURLAndModel(t *testing.T) {
 		t.Fatalf("expected exit code 0, got %d", exitCode)
 	}
 
-	want := "current: demo\nbase_url: https://example.com\nmodel: glm-5\navailable: beta\n"
+	want := "当前配置：demo\n接口地址：https://example.com\n模型：glm-5\n可用配置：beta\n"
 	if got := stdout.String(); got != want {
 		t.Fatalf("expected status output %q, got %q", want, got)
 	}
@@ -1307,14 +1311,6 @@ func writeSettingsFixture(t *testing.T, content string) string {
 	}
 
 	return path
-}
-
-func writeLegacyEnvFixture(t *testing.T, path, content string) {
-	t.Helper()
-
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write legacy env fixture: %v", err)
-	}
 }
 
 func withPromptSession(t *testing.T, input string) *bytes.Buffer {

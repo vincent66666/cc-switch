@@ -9,8 +9,8 @@ func TestValidateProfile_RequiresTokenAndBaseURL(t *testing.T) {
 				"ANTHROPIC_BASE_URL": "https://example.com",
 			},
 		})
-		if err == nil {
-			t.Fatal("expected missing token to fail validation")
+		if err == nil || err.Error() != "配置 \"demo\" 缺少必填字段：ANTHROPIC_AUTH_TOKEN" {
+			t.Fatalf("expected missing token error, got %v", err)
 		}
 	})
 
@@ -20,8 +20,8 @@ func TestValidateProfile_RequiresTokenAndBaseURL(t *testing.T) {
 				"ANTHROPIC_AUTH_TOKEN": "token",
 			},
 		})
-		if err == nil {
-			t.Fatal("expected missing base url to fail validation")
+		if err == nil || err.Error() != "配置 \"demo\" 缺少必填字段：ANTHROPIC_BASE_URL" {
+			t.Fatalf("expected missing base url error, got %v", err)
 		}
 	})
 }

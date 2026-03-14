@@ -9,17 +9,17 @@ import (
 )
 
 func RenderStatus(w io.Writer, current string, currentProfile profile.Profile, names []string) int {
-	_, _ = fmt.Fprintf(w, "current: %s\n", current)
-	_, _ = fmt.Fprintf(w, "base_url: %s\n", currentProfile.Env[profile.EnvBaseURL])
+	_, _ = fmt.Fprintf(w, "当前配置：%s\n", current)
+	_, _ = fmt.Fprintf(w, "接口地址：%s\n", currentProfile.Env[profile.EnvBaseURL])
 
 	model := currentProfile.Env["ANTHROPIC_MODEL"]
 	if model == "" {
 		model = "-"
 	}
-	_, _ = fmt.Fprintf(w, "model: %s\n", model)
+	_, _ = fmt.Fprintf(w, "模型：%s\n", model)
 
 	if len(names) > 0 {
-		_, _ = fmt.Fprintf(w, "available: %s\n", strings.Join(names, " "))
+		_, _ = fmt.Fprintf(w, "可用配置：%s\n", strings.Join(names, " "))
 	}
 
 	return 0

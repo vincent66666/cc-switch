@@ -14,7 +14,6 @@
 - 写入前自动备份 `settings.json`
 - 支持新增、编辑、删除、重命名 profile
 - `add/edit` 支持交互式逐项提问
-- 支持从旧的 `.env` 文件目录导入
 
 ## 默认文件路径
 
@@ -85,7 +84,7 @@ go build -o cc-switch .
 - `ANTHROPIC_DEFAULT_SONNET_MODEL`
 - `ANTHROPIC_DEFAULT_HAIKU_MODEL`
 
-不在这个白名单中的字段不会被接受到 profile 中；导入旧 `.env` 时也会被忽略。
+不在这个白名单中的字段不会被接受到 profile 中。
 
 ## 使用方法
 
@@ -283,44 +282,6 @@ renamed demo to prod
 
 ## 从旧 `.env` 导入
 
-### 9. 导入目录中的旧配置
-
-```bash
-cc-switch import --from ~/.claude/profiles
-```
-
-成功输出：
-
-```text
-imported=3 skipped=1
-```
-
-### 10. 允许覆盖同名 profile
-
-```bash
-cc-switch import --from ~/.claude/profiles --overwrite
-```
-
-### 旧 `.env` 文件格式示例
-
-```bash
-# 阿里 coding plan 个人
-export ANTHROPIC_AUTH_TOKEN="token-demo"
-export ANTHROPIC_BASE_URL="https://example.com"
-export ANTHROPIC_MODEL="glm-5"
-export ANTHROPIC_DEFAULT_OPUS_MODEL="glm-5"
-export ANTHROPIC_DEFAULT_SONNET_MODEL="kimi-k2.5"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="MiniMax-M2.5"
-```
-
-导入规则：
-
-- 文件名（去掉 `.env`）作为 profile 名称
-- 第一行普通注释作为 `description`
-- 只导入支持的 6 个字段
-- 缺少必填字段的 profile 会被跳过
-- 默认不覆盖同名 profile，除非加 `--overwrite`
-
 ## `settings.json` 更新规则
 
 这是本工具最重要的行为约束。
@@ -385,12 +346,6 @@ write settings env: invalid character ...
 
 遇到这种情况时，工具不会继续写入，也不会推进 `~/.claude/cc-switch/profiles.json` 里的 `current`。
 
-### 未提供 `import --from`
-
-```text
---from is required
-```
-
 ### 命令不存在
 
 ```text
@@ -399,14 +354,20 @@ unknown command: foo
 
 ## 推荐使用流程
 
-1. 如果你有旧 `.env` 配置，执行 `cc-switch import --from <dir>`
-2. 执行 `cc-switch list`
-3. 如果需要手工新增配置，执行 `cc-switch add <name> --token ... --base-url ...`
-4. 按需补充模型字段
-5. 执行 `cc-switch use <name>`
-6. 执行 `cc-switch current`
-7. 打开 `~/.claude/settings.json` 检查 `env` 是否已更新
-8. 确认备份出现在 `~/.claude/cc-switch/backups/`
+### 首次配置
+
+1. 执行 `cc-switch add <name> --token ... --base-url ...`
+2. 按需补充模型字段
+3. 执行 `cc-switch use <name>`
+4. 执行 `cc-switch current`
+5. 打开 `~/.claude/settings.json` 检查 `env` 是否已更新
+6. 如果原本已存在 `settings.json`，确认备份出现在 `~/.claude/cc-switch/backups/`
+
+### 日常切换
+
+1. 执行 `cc-switch list`
+2. 执行 `cc-switch use <name>`
+3. 执行 `cc-switch current`
 
 ## 当前限制
 

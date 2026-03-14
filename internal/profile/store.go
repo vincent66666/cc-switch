@@ -94,7 +94,7 @@ func SetCurrent(path, name string) error {
 	}
 
 	if _, ok := data.Profiles[name]; !ok {
-		return fmt.Errorf("profile %q not found", name)
+		return fmt.Errorf("未找到配置 %q", name)
 	}
 
 	data.Current = name
@@ -108,11 +108,11 @@ func Remove(path, name string) error {
 	}
 
 	if name == data.Current {
-		return fmt.Errorf("cannot remove the active profile")
+		return fmt.Errorf("不能删除当前正在使用的配置")
 	}
 
 	if _, ok := data.Profiles[name]; !ok {
-		return fmt.Errorf("profile %q not found", name)
+		return fmt.Errorf("未找到配置 %q", name)
 	}
 
 	delete(data.Profiles, name)
@@ -126,11 +126,11 @@ func Rename(path, oldName, newName string) error {
 	}
 
 	if _, ok := data.Profiles[oldName]; !ok {
-		return fmt.Errorf("profile %q not found", oldName)
+		return fmt.Errorf("未找到配置 %q", oldName)
 	}
 
 	if _, exists := data.Profiles[newName]; exists {
-		return fmt.Errorf("profile %q already exists", newName)
+		return fmt.Errorf("配置 %q 已存在", newName)
 	}
 
 	data.Profiles[newName] = data.Profiles[oldName]

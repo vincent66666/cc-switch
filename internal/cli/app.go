@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -10,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"cc-switch/internal/importer"
 	"cc-switch/internal/output"
 	"cc-switch/internal/profile"
 	"cc-switch/internal/settings"
@@ -55,10 +55,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runRemove(paths, command.Args, stdout, stderr)
 	case "rename":
 		return runRename(paths, command.Args, stdout, stderr)
-	case "import":
-		return runImport(paths, command.Args, stdout, stderr)
 	default:
-		_, _ = fmt.Fprintf(stderr, "unknown command: %s\n", command.Name)
+		_, _ = fmt.Fprintf(stderr, "未知命令：%s\n", command.Name)
 		return 1
 	}
 }
@@ -83,12 +81,12 @@ func defaultPaths() Paths {
 func runCurrent(paths Paths, stdout, stderr io.Writer) int {
 	data, err := profile.Load(paths.Profiles)
 	if err != nil {
-		_, _ = io.WriteString(stdout, "unknown\n")
+		_, _ = io.WriteString(stdout, "未知\n")
 		return 0
 	}
 
 	if data.Current == "" {
-		_, _ = io.WriteString(stdout, "unknown\n")
+		_, _ = io.WriteString(stdout, "未知\n")
 		return 0
 	}
 
@@ -99,7 +97,7 @@ func runCurrent(paths Paths, stdout, stderr io.Writer) int {
 func runList(paths Paths, stdout, stderr io.Writer) int {
 	data, err := profile.Load(paths.Profiles)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "load profiles: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "加载配置失败：%v\n", err)
 		return 1
 	}
 
@@ -110,13 +108,13 @@ func runList(paths Paths, stdout, stderr io.Writer) int {
 func runStatus(paths Paths, stdout, stderr io.Writer) int {
 	data, err := profile.Load(paths.Profiles)
 	if err != nil {
-		_, _ = io.WriteString(stdout, "current: unknown\n")
+		_, _ = io.WriteString(stdout, "当前配置：未知\n")
 		return 0
 	}
 
 	currentProfile, ok := data.Profiles[data.Current]
 	if !ok {
-		_, _ = io.WriteString(stdout, "current: unknown\n")
+		_, _ = io.WriteString(stdout, "当前配置：未知\n")
 		return 0
 	}
 
@@ -125,7 +123,7 @@ func runStatus(paths Paths, stdout, stderr io.Writer) int {
 
 func runUse(paths Paths, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		_, _ = io.WriteString(stderr, "profile name is required\n")
+		_, _ = io.WriteString(stderr, "必须提供配置名称\n")
 		return 1
 	}
 
@@ -133,32 +131,32 @@ func runUse(paths Paths, args []string, stdout, stderr io.Writer) int {
 
 	data, err := profile.Load(paths.Profiles)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "load profiles: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "加载配置失败：%v\n", err)
 		return 1
 	}
 
 	targetProfile, ok := data.Profiles[target]
 	if !ok {
-		_, _ = fmt.Fprintf(stderr, "profile %q not found\n", target)
+		_, _ = fmt.Fprintf(stderr, "未找到配置 %q\n", target)
 		return 1
 	}
 
 	if err := profile.ValidateProfile(target, targetProfile); err != nil {
-		_, _ = fmt.Fprintf(stderr, "%v\n", err)
+		_, _ = fmt.Fprintf(stderr, "%s\n", formatCLIError(err))
 		return 1
 	}
 
 	if err := settings.WriteEnv(paths.Settings, targetProfile.Env, time.Now); err != nil {
-		_, _ = fmt.Fprintf(stderr, "write settings env: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "写入 settings.json 的 env 失败：%v\n", err)
 		return 1
 	}
 
 	if err := profile.SetCurrent(paths.Profiles, target); err != nil {
-		_, _ = fmt.Fprintf(stderr, "update current profile: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "更新当前配置失败：%v\n", err)
 		return 1
 	}
 
-	_, _ = fmt.Fprintf(stdout, "switched to %s\n", target)
+	_, _ = fmt.Fprintf(stdout, "已切换到配置：%s\n", target)
 	return 0
 }
 
@@ -195,7 +193,7 @@ type profileFlags struct {
 func runAdd(paths Paths, args []string, stdout, stderr io.Writer) int {
 	name, input, err := parseProfileFlags(args, false)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "%v\n", err)
+		_, _ = fmt.Fprintf(stderr, "%s\n", formatCLIError(err))
 		return 1
 	}
 
@@ -206,7 +204,7 @@ func runAdd(paths Paths, args []string, stdout, stderr io.Writer) int {
 
 	data, err := profile.Load(paths.Profiles)
 	if err != nil && !os.IsNotExist(err) {
-		_, _ = fmt.Fprintf(stderr, "load profiles: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "加载配置失败：%v\n", err)
 		return 1
 	}
 	if os.IsNotExist(err) {
@@ -216,25 +214,25 @@ func runAdd(paths Paths, args []string, stdout, stderr io.Writer) int {
 	if promptInteractive() && strings.TrimSpace(name) == "" {
 		name, err = promptAddName(promptSession)
 		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "%v\n", err)
+			_, _ = fmt.Fprintf(stderr, "%s\n", formatCLIError(err))
 			return 1
 		}
 	}
 
 	if strings.TrimSpace(name) == "" {
-		_, _ = io.WriteString(stderr, "profile name is required\n")
+		_, _ = io.WriteString(stderr, "必须提供配置名称\n")
 		return 1
 	}
 
 	if _, exists := data.Profiles[name]; exists {
-		_, _ = fmt.Fprintf(stderr, "profile %q already exists\n", name)
+		_, _ = fmt.Fprintf(stderr, "配置 %q 已存在\n", name)
 		return 1
 	}
 
 	if promptInteractive() {
 		input, err = promptAddFields(promptSession, input)
 		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "%v\n", err)
+			_, _ = fmt.Fprintf(stderr, "%s\n", formatCLIError(err))
 			return 1
 		}
 	}
@@ -245,36 +243,36 @@ func runAdd(paths Paths, args []string, stdout, stderr io.Writer) int {
 	}
 
 	if err := profile.ValidateProfile(name, newProfile); err != nil {
-		_, _ = fmt.Fprintf(stderr, "%v\n", err)
+		_, _ = fmt.Fprintf(stderr, "%s\n", formatCLIError(err))
 		return 1
 	}
 
 	data.Profiles[name] = newProfile
 	if err := profile.Save(paths.Profiles, data); err != nil {
-		_, _ = fmt.Fprintf(stderr, "save profiles: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "保存配置失败：%v\n", err)
 		return 1
 	}
 
-	_, _ = fmt.Fprintf(stdout, "added %s\n", name)
+	_, _ = fmt.Fprintf(stdout, "已添加配置：%s\n", name)
 	return 0
 }
 
 func runEdit(paths Paths, args []string, stdout, stderr io.Writer) int {
 	name, input, err := parseProfileFlags(args, true)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "%v\n", err)
+		_, _ = fmt.Fprintf(stderr, "%s\n", formatCLIError(err))
 		return 1
 	}
 
 	data, err := profile.Load(paths.Profiles)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "load profiles: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "加载配置失败：%v\n", err)
 		return 1
 	}
 
 	existing, ok := data.Profiles[name]
 	if !ok {
-		_, _ = fmt.Fprintf(stderr, "profile %q not found\n", name)
+		_, _ = fmt.Fprintf(stderr, "未找到配置 %q\n", name)
 		return 1
 	}
 
@@ -284,7 +282,7 @@ func runEdit(paths Paths, args []string, stdout, stderr io.Writer) int {
 	if promptInteractive() {
 		existing, err = promptEditFields(existing, input)
 		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "%v\n", err)
+			_, _ = fmt.Fprintf(stderr, "%s\n", formatCLIError(err))
 			return 1
 		}
 	} else {
@@ -292,17 +290,17 @@ func runEdit(paths Paths, args []string, stdout, stderr io.Writer) int {
 	}
 
 	if err := profile.ValidateProfile(name, existing); err != nil {
-		_, _ = fmt.Fprintf(stderr, "%v\n", err)
+		_, _ = fmt.Fprintf(stderr, "%s\n", formatCLIError(err))
 		return 1
 	}
 
 	data.Profiles[name] = existing
 	if err := profile.Save(paths.Profiles, data); err != nil {
-		_, _ = fmt.Fprintf(stderr, "save profiles: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "保存配置失败：%v\n", err)
 		return 1
 	}
 
-	_, _ = fmt.Fprintf(stdout, "updated %s\n", name)
+	_, _ = fmt.Fprintf(stdout, "已更新配置：%s\n", name)
 	return 0
 }
 
@@ -315,7 +313,7 @@ func parseProfileFlags(args []string, requireName bool) (string, profileFlags, e
 	}
 
 	if requireName && strings.TrimSpace(name) == "" {
-		return "", profileFlags{}, fmt.Errorf("profile name is required")
+		return "", profileFlags{}, fmt.Errorf("必须提供配置名称")
 	}
 
 	flags := flag.NewFlagSet("profile", flag.ContinueOnError)
@@ -366,13 +364,13 @@ func buildProfileEnv(input profileFlags, existing map[string]string) map[string]
 }
 
 func promptAddName(reader *bufio.Reader) (string, error) {
-	return promptAddValue(reader, "name", "", true, false)
+	return promptAddValue(reader, "名称", "", true, false)
 }
 
 func promptAddFields(reader *bufio.Reader, input profileFlags) (profileFlags, error) {
 	var err error
 	if input.description == "" {
-		input.description, err = promptAddValue(reader, "description", " (optional)", false, false)
+		input.description, err = promptAddValue(reader, "描述", "（可选）", false, false)
 		if err != nil {
 			return profileFlags{}, err
 		}
@@ -390,25 +388,25 @@ func promptAddFields(reader *bufio.Reader, input profileFlags) (profileFlags, er
 		}
 	}
 	if input.model == "" {
-		input.model, err = promptAddValue(reader, "ANTHROPIC_MODEL", " (optional)", false, false)
+		input.model, err = promptAddValue(reader, "ANTHROPIC_MODEL", "（可选）", false, false)
 		if err != nil {
 			return profileFlags{}, err
 		}
 	}
 	if input.defaultOpus == "" {
-		input.defaultOpus, err = promptAddValue(reader, "ANTHROPIC_DEFAULT_OPUS_MODEL", " (optional)", false, false)
+		input.defaultOpus, err = promptAddValue(reader, "ANTHROPIC_DEFAULT_OPUS_MODEL", "（可选）", false, false)
 		if err != nil {
 			return profileFlags{}, err
 		}
 	}
 	if input.defaultSonnet == "" {
-		input.defaultSonnet, err = promptAddValue(reader, "ANTHROPIC_DEFAULT_SONNET_MODEL", " (optional)", false, false)
+		input.defaultSonnet, err = promptAddValue(reader, "ANTHROPIC_DEFAULT_SONNET_MODEL", "（可选）", false, false)
 		if err != nil {
 			return profileFlags{}, err
 		}
 	}
 	if input.defaultHaiku == "" {
-		input.defaultHaiku, err = promptAddValue(reader, "ANTHROPIC_DEFAULT_HAIKU_MODEL", " (optional)", false, false)
+		input.defaultHaiku, err = promptAddValue(reader, "ANTHROPIC_DEFAULT_HAIKU_MODEL", "（可选）", false, false)
 		if err != nil {
 			return profileFlags{}, err
 		}
@@ -422,7 +420,7 @@ func promptEditFields(existing profile.Profile, input profileFlags) (profile.Pro
 	var err error
 	if input.description == "" {
 		var keepCurrent bool
-		existing.Description, keepCurrent, err = promptEditValue(reader, "description", existing.Description, false, false)
+		existing.Description, keepCurrent, err = promptEditValue(reader, "描述", existing.Description, false, false)
 		if err != nil {
 			return profile.Profile{}, err
 		}
@@ -486,7 +484,7 @@ func applyEditPrompt(reader *bufio.Reader, env map[string]string, field, explici
 
 func promptAddValue(reader *bufio.Reader, label, suffix string, required, sensitive bool) (string, error) {
 	_ = sensitive
-	_, _ = fmt.Fprintf(promptWriter, "%s%s: ", label, suffix)
+	_, _ = fmt.Fprintf(promptWriter, "%s%s：", label, suffix)
 	value, err := reader.ReadString('\n')
 	if err != nil {
 		return "", err
@@ -494,7 +492,7 @@ func promptAddValue(reader *bufio.Reader, label, suffix string, required, sensit
 
 	value = strings.TrimSpace(value)
 	if required && value == "" {
-		return "", fmt.Errorf("missing required field: %s", label)
+		return "", fmt.Errorf("缺少必填字段：%s", label)
 	}
 
 	return value, nil
@@ -507,9 +505,9 @@ func promptEditValue(reader *bufio.Reader, label, current string, required, sens
 	}
 
 	if display != "" {
-		_, _ = fmt.Fprintf(promptWriter, "%s [%s] (enter to keep): ", label, display)
+		_, _ = fmt.Fprintf(promptWriter, "%s [%s]（直接回车保留当前值）：", label, display)
 	} else {
-		_, _ = fmt.Fprintf(promptWriter, "%s (enter to keep): ", label)
+		_, _ = fmt.Fprintf(promptWriter, "%s（直接回车保留当前值）：", label)
 	}
 
 	value, err := reader.ReadString('\n')
@@ -520,7 +518,7 @@ func promptEditValue(reader *bufio.Reader, label, current string, required, sens
 	value = strings.TrimSpace(value)
 	if value == "" {
 		if required && strings.TrimSpace(current) == "" {
-			return "", false, fmt.Errorf("missing required field: %s", label)
+			return "", false, fmt.Errorf("缺少必填字段：%s", label)
 		}
 		return current, true, nil
 	}
@@ -538,82 +536,38 @@ func maskValue(value string) string {
 
 func runRemove(paths Paths, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		_, _ = io.WriteString(stderr, "profile name is required\n")
+		_, _ = io.WriteString(stderr, "必须提供配置名称\n")
 		return 1
 	}
 
 	if err := profile.Remove(paths.Profiles, args[0]); err != nil {
-		_, _ = fmt.Fprintf(stderr, "%v\n", err)
+		_, _ = fmt.Fprintf(stderr, "%s\n", formatCLIError(err))
 		return 1
 	}
 
-	_, _ = fmt.Fprintf(stdout, "removed %s\n", args[0])
+	_, _ = fmt.Fprintf(stdout, "已删除配置：%s\n", args[0])
 	return 0
 }
 
 func runRename(paths Paths, args []string, stdout, stderr io.Writer) int {
 	if len(args) < 2 {
-		_, _ = io.WriteString(stderr, "old and new profile names are required\n")
+		_, _ = io.WriteString(stderr, "必须提供旧配置名称和新配置名称\n")
 		return 1
 	}
 
 	if err := profile.Rename(paths.Profiles, args[0], args[1]); err != nil {
-		_, _ = fmt.Fprintf(stderr, "%v\n", err)
+		_, _ = fmt.Fprintf(stderr, "%s\n", formatCLIError(err))
 		return 1
 	}
 
-	_, _ = fmt.Fprintf(stdout, "renamed %s to %s\n", args[0], args[1])
+	_, _ = fmt.Fprintf(stdout, "已将配置 %s 重命名为 %s\n", args[0], args[1])
 	return 0
 }
 
-func runImport(paths Paths, args []string, stdout, stderr io.Writer) int {
-	flags := flag.NewFlagSet("import", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-
-	var from string
-	var overwrite bool
-	flags.StringVar(&from, "from", "", "legacy env directory")
-	flags.BoolVar(&overwrite, "overwrite", false, "overwrite existing profiles")
-
-	if err := flags.Parse(args); err != nil {
-		_, _ = fmt.Fprintf(stderr, "%v\n", err)
-		return 1
+func formatCLIError(err error) string {
+	if errors.Is(err, io.EOF) {
+		return "输入已结束"
 	}
 
-	if from == "" {
-		_, _ = io.WriteString(stderr, "--from is required\n")
-		return 1
-	}
-
-	data, err := profile.Load(paths.Profiles)
-	if err != nil && !os.IsNotExist(err) {
-		_, _ = fmt.Fprintf(stderr, "load profiles: %v\n", err)
-		return 1
-	}
-	if os.IsNotExist(err) {
-		data = profile.ProfilesFile{Version: 1, Profiles: map[string]profile.Profile{}}
-	}
-
-	existing := map[string]struct{}{}
-	for name := range data.Profiles {
-		existing[name] = struct{}{}
-	}
-
-	result, err := importer.ImportDir(from, overwrite, existing)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "import profiles: %v\n", err)
-		return 1
-	}
-
-	for name, importedProfile := range result.Imported {
-		data.Profiles[name] = importedProfile
-	}
-
-	if err := profile.Save(paths.Profiles, data); err != nil {
-		_, _ = fmt.Fprintf(stderr, "save profiles: %v\n", err)
-		return 1
-	}
-
-	_, _ = fmt.Fprintf(stdout, "imported=%d skipped=%d\n", len(result.Imported), len(result.Skipped))
-	return 0
+	return err.Error()
 }
