@@ -284,8 +284,6 @@ renamed demo to prod
 
 如果被重命名的是当前 profile，`current` 指针也会一起更新。
 
-## 从旧 `.env` 导入
-
 ## `settings.json` 更新规则
 
 这是本工具最重要的行为约束。

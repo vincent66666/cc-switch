@@ -7,23 +7,28 @@ import (
 
 func TestStatusSelectorRender(t *testing.T) {
 	selector := statusSelector{
-		currentName: "demo",
-		baseURL:     "https://example.com",
-		model:       "glm-5",
-		names:       []string{"beta", "prod"},
-		index:       0,
+		currentName:        "demo",
+		currentDescription: "正式环境",
+		baseURL:            "https://example.com",
+		model:              "glm-5",
+		names:              []string{"beta", "prod"},
+		descriptions: map[string]string{
+			"beta": "测试环境",
+			"prod": "生产环境",
+		},
+		index: 0,
 	}
 
 	rendered := selector.render()
 
 	for _, fragment := range []string{
-		"当前配置：demo",
+		"当前配置：demo - 正式环境",
 		"接口地址：https://example.com",
 		"模型：glm-5",
 		"可用配置：",
-		"> demo（当前）",
-		"  beta",
-		"  prod",
+		"> demo（当前） - 正式环境",
+		"  beta - 测试环境",
+		"  prod - 生产环境",
 	} {
 		if !strings.Contains(rendered, fragment) {
 			t.Fatalf("expected rendered selector to contain %q, got %q", fragment, rendered)
@@ -33,19 +38,24 @@ func TestStatusSelectorRender(t *testing.T) {
 
 func TestStatusSelectorRenderIncludesCurrentProfileFirstAndMarked(t *testing.T) {
 	selector := statusSelector{
-		currentName: "demo",
-		baseURL:     "https://example.com",
-		model:       "glm-5",
-		names:       []string{"beta", "prod"},
-		index:       0,
+		currentName:        "demo",
+		currentDescription: "正式环境",
+		baseURL:            "https://example.com",
+		model:              "glm-5",
+		names:              []string{"beta", "prod"},
+		descriptions: map[string]string{
+			"beta": "测试环境",
+			"prod": "生产环境",
+		},
+		index: 0,
 	}
 
 	rendered := selector.render()
 
 	for _, fragment := range []string{
-		"> demo（当前）",
-		"  beta",
-		"  prod",
+		"> demo（当前） - 正式环境",
+		"  beta - 测试环境",
+		"  prod - 生产环境",
 	} {
 		if !strings.Contains(rendered, fragment) {
 			t.Fatalf("expected rendered selector to contain %q, got %q", fragment, rendered)
@@ -98,9 +108,13 @@ func TestStatusSelectorSelectedNameEmptyWhenNoAvailableProfiles(t *testing.T) {
 
 func TestStatusSelectorRenderUsesDashForEmptyModel(t *testing.T) {
 	selector := statusSelector{
-		currentName: "demo",
-		baseURL:     "https://example.com",
-		names:       []string{"beta"},
+		currentName:        "demo",
+		currentDescription: "正式环境",
+		baseURL:            "https://example.com",
+		names:              []string{"beta"},
+		descriptions: map[string]string{
+			"beta": "测试环境",
+		},
 	}
 
 	rendered := selector.render()

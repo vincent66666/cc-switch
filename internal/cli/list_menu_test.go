@@ -9,15 +9,19 @@ func TestListMenuRenderList(t *testing.T) {
 	menu := listMenu{
 		profiles:    []string{"beta", "demo", "prod"},
 		currentName: "demo",
-		index:       0,
+		descriptions: map[string]string{
+			"beta": "测试环境",
+			"demo": "正式环境",
+		},
+		index: 0,
 	}
 
 	rendered := menu.render()
 
 	for _, fragment := range []string{
 		"配置列表：",
-		"> demo（当前）",
-		"  beta",
+		"> demo（当前） - 正式环境",
+		"  beta - 测试环境",
 		"  prod",
 	} {
 		if !strings.Contains(rendered, fragment) {
@@ -30,14 +34,18 @@ func TestListMenuRenderKeepsCurrentMarkerWhenSelectionMoves(t *testing.T) {
 	menu := listMenu{
 		profiles:    []string{"demo", "beta", "prod"},
 		currentName: "demo",
-		index:       1,
+		descriptions: map[string]string{
+			"beta": "测试环境",
+			"demo": "正式环境",
+		},
+		index: 1,
 	}
 
 	rendered := menu.render()
 
 	for _, fragment := range []string{
-		"  demo（当前）",
-		"> beta",
+		"  demo（当前） - 正式环境",
+		"> beta - 测试环境",
 	} {
 		if !strings.Contains(rendered, fragment) {
 			t.Fatalf("expected list render to contain %q, got %q", fragment, rendered)
@@ -48,7 +56,10 @@ func TestListMenuRenderKeepsCurrentMarkerWhenSelectionMoves(t *testing.T) {
 func TestListMenuEnterActionsAndBack(t *testing.T) {
 	menu := listMenu{
 		profiles: []string{"beta", "demo"},
-		index:    0,
+		descriptions: map[string]string{
+			"beta": "测试环境",
+		},
+		index: 0,
 	}
 
 	menu.enterActions()
@@ -58,9 +69,10 @@ func TestListMenuEnterActionsAndBack(t *testing.T) {
 
 	rendered := menu.render()
 	for _, fragment := range []string{
-		"操作：beta",
+		"操作：beta - 测试环境",
 		"> 切换",
 		"  修改",
+		"  重命名",
 		"  删除",
 		"  返回",
 	} {
@@ -79,14 +91,20 @@ func TestListMenuCurrentProfileActionsHideRemove(t *testing.T) {
 	menu := listMenu{
 		profiles:    []string{"beta", "demo"},
 		currentName: "demo",
-		index:       0,
+		descriptions: map[string]string{
+			"demo": "正式环境",
+		},
+		index: 0,
 	}
 
 	menu.enterActions()
 	rendered := menu.render()
 
-	if !strings.Contains(rendered, "操作：demo") {
+	if !strings.Contains(rendered, "操作：demo（当前） - 正式环境") {
 		t.Fatalf("expected current profile action header, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "重命名") {
+		t.Fatalf("expected current profile actions to include rename, got %q", rendered)
 	}
 	if strings.Contains(rendered, "删除") {
 		t.Fatalf("expected current profile actions to hide remove, got %q", rendered)
@@ -97,13 +115,18 @@ func TestListMenuCurrentProfileActionsStayFilteredAfterSelectionChanges(t *testi
 	menu := listMenu{
 		profiles:    []string{"beta", "demo", "prod"},
 		currentName: "demo",
-		index:       1,
+		descriptions: map[string]string{
+			"beta": "测试环境",
+			"demo": "正式环境",
+		},
+		index: 1,
 	}
 
 	menu.enterActions()
 	if got := menu.selectedAction(); got != listMenuActionSwitch {
 		t.Fatalf("expected non-current actions to start at switch, got %q", got)
 	}
+	menu.moveDown()
 	menu.moveDown()
 	menu.moveDown()
 	if got := menu.selectedAction(); got != listMenuActionRemove {
@@ -119,6 +142,7 @@ func TestListMenuCurrentProfileActionsStayFilteredAfterSelectionChanges(t *testi
 	}
 	menu.moveDown()
 	menu.moveDown()
+	menu.moveDown()
 	if got := menu.selectedAction(); got != listMenuActionBack {
 		t.Fatalf("expected filtered action set to wrap on back, got %q", got)
 	}
@@ -128,7 +152,11 @@ func TestListMenuNonCurrentProfileStillShowsRemove(t *testing.T) {
 	menu := listMenu{
 		profiles:    []string{"beta", "demo"},
 		currentName: "demo",
-		index:       1,
+		descriptions: map[string]string{
+			"beta": "测试环境",
+			"demo": "正式环境",
+		},
+		index: 1,
 	}
 
 	menu.enterActions()
@@ -136,6 +164,9 @@ func TestListMenuNonCurrentProfileStillShowsRemove(t *testing.T) {
 
 	if !strings.Contains(rendered, "删除") {
 		t.Fatalf("expected non-current profile actions to include remove, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "重命名") {
+		t.Fatalf("expected non-current profile actions to include rename, got %q", rendered)
 	}
 }
 
@@ -160,11 +191,14 @@ func TestListMenuMoveWrapsInCurrentMode(t *testing.T) {
 func TestListMenuEnterDeleteConfirmAndCancel(t *testing.T) {
 	menu := listMenu{
 		profiles: []string{"beta", "demo"},
-		index:    0,
+		descriptions: map[string]string{
+			"beta": "测试环境",
+		},
+		index: 0,
 	}
 
 	menu.enterActions()
-	menu.actionIndex = 2
+	menu.actionIndex = 3
 	menu.enterDeleteConfirm()
 	if menu.mode != listMenuModeDeleteConfirm {
 		t.Fatalf("expected delete-confirm mode, got %v", menu.mode)
@@ -172,7 +206,7 @@ func TestListMenuEnterDeleteConfirmAndCancel(t *testing.T) {
 
 	rendered := menu.render()
 	for _, fragment := range []string{
-		"确认删除：beta",
+		"确认删除：beta - 测试环境",
 		"> 确认删除",
 		"  取消",
 	} {

@@ -8,8 +8,8 @@ import (
 	"cc-switch/internal/profile"
 )
 
-func RenderStatus(w io.Writer, current string, currentProfile profile.Profile, names []string) int {
-	_, _ = fmt.Fprintf(w, "当前配置：%s\n", current)
+func RenderStatus(w io.Writer, currentDisplay string, currentProfile profile.Profile, names []string) int {
+	_, _ = fmt.Fprintf(w, "当前配置：%s\n", currentDisplay)
 	_, _ = fmt.Fprintf(w, "接口地址：%s\n", currentProfile.Env[profile.EnvBaseURL])
 
 	model := currentProfile.Env["ANTHROPIC_MODEL"]

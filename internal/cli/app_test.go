@@ -1192,6 +1192,7 @@ func TestRun_StatusInteractiveArrowSelectionSwitchesProfile(t *testing.T) {
 				},
 			},
 			"demo": {
+				Description: "正式环境",
 				Env: map[string]string{
 					profile.EnvAuthToken: "token-demo",
 					profile.EnvBaseURL:   "https://demo.example.com",
@@ -1245,6 +1246,7 @@ func TestRun_StatusInteractiveQuitLeavesCurrentUnchanged(t *testing.T) {
 				},
 			},
 			"demo": {
+				Description: "正式环境",
 				Env: map[string]string{
 					profile.EnvAuthToken: "token-demo",
 					profile.EnvBaseURL:   "https://demo.example.com",
@@ -1289,6 +1291,7 @@ func TestRun_StatusInteractiveUsesAlternateScreen(t *testing.T) {
 				},
 			},
 			"demo": {
+				Description: "正式环境",
 				Env: map[string]string{
 					profile.EnvAuthToken: "token-demo",
 					profile.EnvBaseURL:   "https://demo.example.com",
@@ -1489,6 +1492,7 @@ func TestRun_StatusFallsBackToPlainTextWhenStdoutIsNotTTY(t *testing.T) {
 				},
 			},
 			"demo": {
+				Description: "正式环境",
 				Env: map[string]string{
 					profile.EnvAuthToken: "token-demo",
 					profile.EnvBaseURL:   "https://demo.example.com",
@@ -1509,7 +1513,7 @@ func TestRun_StatusFallsBackToPlainTextWhenStdoutIsNotTTY(t *testing.T) {
 		t.Fatalf("expected status fallback to succeed, got %d, stderr=%q", exitCode, stderr.String())
 	}
 
-	want := "当前配置：demo\n接口地址：https://demo.example.com\n模型：glm-5\n可用配置：beta\n"
+	want := "当前配置：demo - 正式环境\n接口地址：https://demo.example.com\n模型：glm-5\n可用配置：beta\n"
 	if got := stdout.String(); got != want {
 		t.Fatalf("expected plain-text status output %q, got %q", want, got)
 	}
@@ -1561,12 +1565,14 @@ func TestRun_StatusFallsBackToPlainTextWhenStdoutIsTTYAndStdinIsFile(t *testing.
 		Current: "demo",
 		Profiles: map[string]profile.Profile{
 			"beta": {
+				Description: "测试环境",
 				Env: map[string]string{
 					profile.EnvAuthToken: "token-beta",
 					profile.EnvBaseURL:   "https://beta.example.com",
 				},
 			},
 			"demo": {
+				Description: "正式环境",
 				Env: map[string]string{
 					profile.EnvAuthToken: "token-demo",
 					profile.EnvBaseURL:   "https://demo.example.com",
@@ -1583,7 +1589,7 @@ func TestRun_StatusFallsBackToPlainTextWhenStdoutIsTTYAndStdinIsFile(t *testing.
 		t.Fatalf("expected tty-stdout/file-stdin status fallback to succeed, output=%q", output)
 	}
 
-	want := "当前配置：demo\r\n接口地址：https://demo.example.com\r\n模型：glm-5\r\n可用配置：beta\r\n"
+	want := "当前配置：demo - 正式环境\r\n接口地址：https://demo.example.com\r\n模型：glm-5\r\n可用配置：beta - 测试环境\r\n"
 	if output != want {
 		t.Fatalf("expected plain-text tty-stdout/file-stdin status output %q, got %q", want, output)
 	}
@@ -1643,12 +1649,14 @@ func TestRun_ListPrintsProfiles(t *testing.T) {
 		Current: "demo",
 		Profiles: map[string]profile.Profile{
 			"beta": {
+				Description: "测试环境",
 				Env: map[string]string{
 					profile.EnvAuthToken: "token-b",
 					profile.EnvBaseURL:   "https://beta.example.com",
 				},
 			},
 			"demo": {
+				Description: "正式环境",
 				Env: map[string]string{
 					profile.EnvAuthToken: "token-a",
 					profile.EnvBaseURL:   "https://example.com",
@@ -1668,7 +1676,7 @@ func TestRun_ListPrintsProfiles(t *testing.T) {
 		t.Fatalf("expected exit code 0, got %d", exitCode)
 	}
 
-	if got := stdout.String(); got != "beta\ndemo\n" {
+	if got := stdout.String(); got != "beta - 测试环境\ndemo - 正式环境\n" {
 		t.Fatalf("expected sorted profile list, got %q", got)
 	}
 }
@@ -1678,6 +1686,7 @@ func TestRun_ListFallsBackToPlainTextWhenStdoutIsNotTTY(t *testing.T) {
 		Version: 1,
 		Profiles: map[string]profile.Profile{
 			"demo": {
+				Description: "正式环境",
 				Env: map[string]string{
 					profile.EnvAuthToken: "token-demo",
 					profile.EnvBaseURL:   "https://demo.example.com",
@@ -1703,7 +1712,7 @@ func TestRun_ListFallsBackToPlainTextWhenStdoutIsNotTTY(t *testing.T) {
 		t.Fatalf("expected list fallback to succeed, got %d, stderr=%q", exitCode, stderr.String())
 	}
 
-	if got := stdout.String(); got != "beta\ndemo\n" {
+	if got := stdout.String(); got != "beta\ndemo - 正式环境\n" {
 		t.Fatalf("expected plain-text list output, got %q", got)
 	}
 }
@@ -1713,12 +1722,14 @@ func TestRun_ListFallsBackToPlainTextWhenStdinIsNotTTY(t *testing.T) {
 		Version: 1,
 		Profiles: map[string]profile.Profile{
 			"demo": {
+				Description: "正式环境",
 				Env: map[string]string{
 					profile.EnvAuthToken: "token-demo",
 					profile.EnvBaseURL:   "https://demo.example.com",
 				},
 			},
 			"beta": {
+				Description: "测试环境",
 				Env: map[string]string{
 					profile.EnvAuthToken: "token-beta",
 					profile.EnvBaseURL:   "https://beta.example.com",
@@ -1743,7 +1754,7 @@ func TestRun_ListFallsBackToPlainTextWhenStdinIsNotTTY(t *testing.T) {
 		t.Fatalf("expected stdin non-tty fallback to succeed, got %d, stderr=%q", exitCode, stderr.String())
 	}
 
-	if got := stdout.String(); got != "beta\ndemo\n" {
+	if got := stdout.String(); got != "beta - 测试环境\ndemo - 正式环境\n" {
 		t.Fatalf("expected plain-text list output when stdin is not tty, got %q", got)
 	}
 	if strings.Contains(stdout.String(), clearScreenSequence) || strings.Contains(stdout.String(), enterAlternateScreenMode) {
@@ -1757,12 +1768,14 @@ func TestRun_ListFallsBackToPlainTextWhenStdoutIsTTYAndStdinIsFile(t *testing.T)
 		Version: 1,
 		Profiles: map[string]profile.Profile{
 			"demo": {
+				Description: "正式环境",
 				Env: map[string]string{
 					profile.EnvAuthToken: "token-demo",
 					profile.EnvBaseURL:   "https://demo.example.com",
 				},
 			},
 			"beta": {
+				Description: "测试环境",
 				Env: map[string]string{
 					profile.EnvAuthToken: "token-beta",
 					profile.EnvBaseURL:   "https://beta.example.com",
@@ -1778,12 +1791,78 @@ func TestRun_ListFallsBackToPlainTextWhenStdoutIsTTYAndStdinIsFile(t *testing.T)
 		t.Fatalf("expected tty-stdout/file-stdin list fallback to succeed, output=%q", output)
 	}
 
-	want := "beta\r\ndemo\r\n"
+	want := "beta - 测试环境\r\ndemo - 正式环境\r\n"
 	if output != want {
 		t.Fatalf("expected plain-text tty-stdout/file-stdin list output %q, got %q", want, output)
 	}
 	if strings.Contains(output, clearScreenSequence) || strings.Contains(output, enterAlternateScreenMode) {
 		t.Fatalf("expected no interactive control sequences in tty-stdout/file-stdin list output, got %q", output)
+	}
+}
+
+func TestRun_ListPlainTextOmitsSeparatorWhenDescriptionIsEmpty(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Description: "正式环境",
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+	withPromptSession(t, "")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"list"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected plain-text list to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	if got := stdout.String(); got != "beta\ndemo - 正式环境\n" {
+		t.Fatalf("expected empty description to omit separator, got %q", got)
+	}
+}
+
+func TestRun_ListPlainTextTrimsDescriptionWhitespace(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Description: "  正式环境  ",
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+	withPromptSession(t, "")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"list"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected plain-text list trim case to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	if got := stdout.String(); got != "demo - 正式环境\n" {
+		t.Fatalf("expected description whitespace to be trimmed, got %q", got)
 	}
 }
 
@@ -1901,7 +1980,7 @@ func TestRun_ListInteractiveBackLeavesCurrentUnchanged(t *testing.T) {
 		},
 	})
 
-	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, "\r\x1b[B\x1b[B\rq", map[string]string{
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, "\r\x1b[B\x1b[B\x1b[B\rq", map[string]string{
 		"CC_SWITCH_PROFILES_PATH": profilesPath,
 	})
 	if exitCode != 0 {
@@ -2053,7 +2132,7 @@ func TestRun_ListInteractiveDeleteConfirmQuitClosesAlternateScreen(t *testing.T)
 		},
 	})
 
-	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, "\r\x1b[B\x1b[B\rq", map[string]string{
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, "\x1b[B\r\x1b[B\x1b[B\x1b[B\rq", map[string]string{
 		"CC_SWITCH_PROFILES_PATH": profilesPath,
 	})
 	if exitCode != 0 {
@@ -2207,6 +2286,112 @@ func TestRun_ListInteractiveEditReentersAlternateScreenAfterSuccess(t *testing.T
 	}
 }
 
+func TestRun_ListInteractiveRenameUpdatesProfileAndReturnsToList(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Description: "旧描述",
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+		},
+	})
+
+	input := "\x1b[B\r\x1b[B\x1b[B\rstaging\nq"
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, input, map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected interactive list rename to succeed, output=%q", output)
+	}
+
+	for _, fragment := range []string{
+		"新名称：",
+		"已将配置 beta 重命名为 staging",
+		"> staging",
+	} {
+		if !strings.Contains(output, fragment) {
+			t.Fatalf("expected rename flow output to contain %q, got %q", fragment, output)
+		}
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after interactive list rename: %v", err)
+	}
+	if _, exists := savedProfiles.Profiles["beta"]; exists {
+		t.Fatalf("expected old beta profile to be removed, got %#v", savedProfiles.Profiles)
+	}
+	if _, exists := savedProfiles.Profiles["staging"]; !exists {
+		t.Fatalf("expected staging profile to exist after rename, got %#v", savedProfiles.Profiles)
+	}
+}
+
+func TestRun_ListInteractiveRenameCurrentProfileUpdatesCurrentAndReentersList(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Description: "正式环境",
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+		},
+	})
+
+	input := "\r\x1b[B\x1b[B\rprod\nq"
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, input, map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected interactive current-profile rename to succeed, output=%q", output)
+	}
+
+	if got := strings.Count(output, enterAlternateScreenMode); got != 2 {
+		t.Fatalf("expected two alternate-screen enters around rename success flow, got %d in %q", got, output)
+	}
+	if got := strings.Count(output, exitAlternateScreenMode); got != 2 {
+		t.Fatalf("expected two alternate-screen exits around rename success flow, got %d in %q", got, output)
+	}
+	for _, fragment := range []string{
+		"已将配置 demo 重命名为 prod",
+		"> prod（当前） - 正式环境",
+	} {
+		if !strings.Contains(output, fragment) {
+			t.Fatalf("expected current-profile rename output to contain %q, got %q", fragment, output)
+		}
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after interactive current-profile rename: %v", err)
+	}
+	if savedProfiles.Current != "prod" {
+		t.Fatalf("expected current profile to move to prod, got %q", savedProfiles.Current)
+	}
+}
+
 func TestRun_ListInteractiveRemoveConfirmsAndRefreshesList(t *testing.T) {
 	scriptPath := requireScript(t)
 	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
@@ -2234,7 +2419,7 @@ func TestRun_ListInteractiveRemoveConfirmsAndRefreshesList(t *testing.T) {
 		},
 	})
 
-	input := "\x1b[B\r\x1b[B\x1b[B\r\rq"
+	input := "\x1b[B\r\x1b[B\x1b[B\x1b[B\r\rq"
 	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, input, map[string]string{
 		"CC_SWITCH_PROFILES_PATH": profilesPath,
 	})
@@ -2282,7 +2467,7 @@ func TestRun_ListInteractiveRemoveReentersAlternateScreenAfterSuccess(t *testing
 		},
 	})
 
-	input := "\x1b[B\r\x1b[B\x1b[B\r\rq"
+	input := "\x1b[B\r\x1b[B\x1b[B\x1b[B\r\rq"
 	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, input, map[string]string{
 		"CC_SWITCH_PROFILES_PATH": profilesPath,
 	})
@@ -2315,7 +2500,7 @@ func TestRun_ListInteractiveRemoveLastProfileShowsEmptyState(t *testing.T) {
 		},
 	})
 
-	input := "\r\x1b[B\x1b[B\r\rq"
+	input := "\r\x1b[B\x1b[B\x1b[B\r\rq"
 	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, input, map[string]string{
 		"CC_SWITCH_PROFILES_PATH": profilesPath,
 	})
@@ -2353,7 +2538,7 @@ func TestRun_ListInteractiveEmptyStateQuitClosesAlternateScreen(t *testing.T) {
 		},
 	})
 
-	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, "\r\x1b[B\x1b[B\r\rq", map[string]string{
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, "\r\x1b[B\x1b[B\x1b[B\r\rq", map[string]string{
 		"CC_SWITCH_PROFILES_PATH": profilesPath,
 	})
 	if exitCode != 0 {
@@ -2377,6 +2562,7 @@ func TestRun_NoArgsShowsBaseURLAndModel(t *testing.T) {
 		Current: "demo",
 		Profiles: map[string]profile.Profile{
 			"demo": {
+				Description: "正式环境",
 				Env: map[string]string{
 					profile.EnvAuthToken: "token",
 					profile.EnvBaseURL:   "https://example.com",
@@ -2384,6 +2570,7 @@ func TestRun_NoArgsShowsBaseURLAndModel(t *testing.T) {
 				},
 			},
 			"beta": {
+				Description: "测试环境",
 				Env: map[string]string{
 					profile.EnvAuthToken: "token-b",
 					profile.EnvBaseURL:   "https://beta.example.com",
@@ -2403,7 +2590,7 @@ func TestRun_NoArgsShowsBaseURLAndModel(t *testing.T) {
 		t.Fatalf("expected exit code 0, got %d", exitCode)
 	}
 
-	want := "当前配置：demo\n接口地址：https://example.com\n模型：glm-5\n可用配置：beta\n"
+	want := "当前配置：demo - 正式环境\n接口地址：https://example.com\n模型：glm-5\n可用配置：beta - 测试环境\n"
 	if got := stdout.String(); got != want {
 		t.Fatalf("expected status output %q, got %q", want, got)
 	}

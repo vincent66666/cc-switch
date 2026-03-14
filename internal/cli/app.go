@@ -138,12 +138,13 @@ func runList(paths Paths, stdout, stderr io.Writer) int {
 	names := profileNames(data.Profiles)
 	if selectorInteractive(stdout) && len(names) > 0 {
 		return runInteractiveList(paths, listMenu{
-			profiles:    prioritizeCurrentProfile(names, data.Current),
-			currentName: data.Current,
+			profiles:     prioritizeCurrentProfile(names, data.Current),
+			currentName:  data.Current,
+			descriptions: profileDescriptions(data.Profiles),
 		}, stdout, stderr)
 	}
 
-	return output.RenderList(stdout, names)
+	return output.RenderList(stdout, displayNamesForProfiles(data.Profiles, names))
 }
 
 func runStatus(paths Paths, stdout, stderr io.Writer) int {
@@ -162,15 +163,22 @@ func runStatus(paths Paths, stdout, stderr io.Writer) int {
 	names := availableNames(data.Profiles, data.Current)
 	if selectorInteractive(stdout) && len(names) > 0 {
 		selector := statusSelector{
-			currentName: data.Current,
-			baseURL:     currentProfile.Env[profile.EnvBaseURL],
-			model:       currentProfile.Env["ANTHROPIC_MODEL"],
-			names:       names,
+			currentName:        data.Current,
+			currentDescription: currentProfile.Description,
+			baseURL:            currentProfile.Env[profile.EnvBaseURL],
+			model:              currentProfile.Env["ANTHROPIC_MODEL"],
+			names:              names,
+			descriptions:       profileDescriptions(data.Profiles),
 		}
 		return runInteractiveStatus(paths, selector, stdout, stderr)
 	}
 
-	return output.RenderStatus(stdout, data.Current, currentProfile, names)
+	return output.RenderStatus(
+		stdout,
+		profileDisplayName(data.Current, currentProfile.Description),
+		currentProfile,
+		displayNamesForProfiles(data.Profiles, names),
+	)
 }
 
 func runUse(paths Paths, args []string, stdout, stderr io.Writer) int {
@@ -325,6 +333,34 @@ func runInteractiveList(paths Paths, menu listMenu, stdout, stderr io.Writer) in
 						_, _ = fmt.Fprintf(stderr, "加载配置失败：%v\n", err)
 						return 1
 					}
+				case listMenuActionRename:
+					selectedName := menu.selectedProfile()
+					selectedIndex := menu.index
+
+					if closeInteractive != nil {
+						closeInteractive()
+					}
+
+					newName, err := promptRenameName(reader)
+					if err != nil {
+						_, _ = fmt.Fprintf(stderr, "%s\n", formatCLIError(err))
+						return 1
+					}
+
+					exitCode := runRename(paths, []string{selectedName, newName}, stdout, stderr)
+					if exitCode != 0 {
+						return exitCode
+					}
+
+					closeInteractive, err = startInteractiveSession(stdinFile, stdout)
+					if err != nil {
+						return 1
+					}
+					menu, err = reloadListMenu(paths, newName, selectedIndex)
+					if err != nil {
+						_, _ = fmt.Fprintf(stderr, "加载配置失败：%v\n", err)
+						return 1
+					}
 				case listMenuActionRemove:
 					menu.enterDeleteConfirm()
 				case listMenuActionBack:
@@ -390,8 +426,9 @@ func reloadListMenu(paths Paths, selectedName string, selectedIndex int) (listMe
 	}
 
 	menu := listMenu{
-		profiles:    prioritizeCurrentProfile(profileNames(data.Profiles), data.Current),
-		currentName: data.Current,
+		profiles:     prioritizeCurrentProfile(profileNames(data.Profiles), data.Current),
+		currentName:  data.Current,
+		descriptions: profileDescriptions(data.Profiles),
 	}
 
 	if selectedName != "" {
@@ -469,6 +506,39 @@ func availableNames(profiles map[string]profile.Profile, current string) []strin
 		names = append(names, name)
 	}
 	return names
+}
+
+func displayNamesForProfiles(profiles map[string]profile.Profile, names []string) []string {
+	displayNames := make([]string, 0, len(names))
+	for _, name := range names {
+		displayNames = append(displayNames, profileDisplayName(name, profiles[name].Description))
+	}
+	return displayNames
+}
+
+func profileDisplayName(name, description string) string {
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return name
+	}
+
+	return name + " - " + description
+}
+
+func profileListDisplayName(name, description string, current bool) string {
+	if current {
+		return profileDisplayName(name+"（当前）", description)
+	}
+
+	return profileDisplayName(name, description)
+}
+
+func profileDescriptions(profiles map[string]profile.Profile) map[string]string {
+	descriptions := make(map[string]string, len(profiles))
+	for name, item := range profiles {
+		descriptions[name] = item.Description
+	}
+	return descriptions
 }
 
 type profileFlags struct {
@@ -665,6 +735,10 @@ func buildProfileEnv(input profileFlags, existing map[string]string) map[string]
 
 func promptAddName(reader *bufio.Reader) (string, error) {
 	return promptAddValue(reader, "名称", "", true, false)
+}
+
+func promptRenameName(reader *bufio.Reader) (string, error) {
+	return promptAddValue(reader, "新名称", "", true, false)
 }
 
 func promptAddFields(reader *bufio.Reader, input profileFlags) (profileFlags, error) {

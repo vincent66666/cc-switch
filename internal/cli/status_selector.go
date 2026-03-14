@@ -5,11 +5,13 @@ import "strings"
 const interactiveQuitHint = "按 q 或 Ctrl+C 退出"
 
 type statusSelector struct {
-	currentName string
-	baseURL     string
-	model       string
-	names       []string
-	index       int
+	currentName        string
+	currentDescription string
+	baseURL            string
+	model              string
+	names              []string
+	descriptions       map[string]string
+	index              int
 }
 
 func (s *statusSelector) moveUp() {
@@ -54,7 +56,7 @@ func (s statusSelector) render() string {
 		model = "-"
 	}
 
-	out.WriteString("当前配置：" + s.currentName + "\n")
+	out.WriteString("当前配置：" + profileDisplayName(s.currentName, s.currentDescription) + "\n")
 	out.WriteString("接口地址：" + s.baseURL + "\n")
 	out.WriteString("模型：" + model + "\n")
 
@@ -93,9 +95,10 @@ func (s statusSelector) orderedNames() []string {
 }
 
 func (s statusSelector) displayName(name string) string {
-	if name == s.currentName {
-		return name + "（当前）"
+	description := s.descriptions[name]
+	if name == s.currentName && strings.TrimSpace(description) == "" {
+		description = s.currentDescription
 	}
 
-	return name
+	return profileListDisplayName(name, description, name == s.currentName)
 }

@@ -15,6 +15,7 @@ type listMenuAction string
 const (
 	listMenuActionSwitch listMenuAction = "切换"
 	listMenuActionEdit   listMenuAction = "修改"
+	listMenuActionRename listMenuAction = "重命名"
 	listMenuActionRemove listMenuAction = "删除"
 	listMenuActionBack   listMenuAction = "返回"
 )
@@ -22,6 +23,7 @@ const (
 var listMenuActions = []listMenuAction{
 	listMenuActionSwitch,
 	listMenuActionEdit,
+	listMenuActionRename,
 	listMenuActionRemove,
 	listMenuActionBack,
 }
@@ -29,6 +31,7 @@ var listMenuActions = []listMenuAction{
 var listMenuCurrentActions = []listMenuAction{
 	listMenuActionSwitch,
 	listMenuActionEdit,
+	listMenuActionRename,
 	listMenuActionBack,
 }
 
@@ -47,6 +50,7 @@ var listMenuConfirmActions = []listMenuConfirmAction{
 type listMenu struct {
 	profiles     []string
 	currentName  string
+	descriptions map[string]string
 	index        int
 	mode         listMenuMode
 	actionIndex  int
@@ -161,7 +165,7 @@ func (m listMenu) render() string {
 
 	switch m.mode {
 	case listMenuModeDeleteConfirm:
-		out.WriteString("确认删除：" + m.selectedProfile() + "\n")
+		out.WriteString("确认删除：" + m.profileDisplayName(m.selectedProfile()) + "\n")
 		for i, action := range listMenuConfirmActions {
 			prefix := "  "
 			if i == m.confirmIndex {
@@ -170,7 +174,7 @@ func (m listMenu) render() string {
 			out.WriteString(prefix + string(action) + "\n")
 		}
 	case listMenuModeActions:
-		out.WriteString("操作：" + m.selectedProfile() + "\n")
+		out.WriteString("操作：" + m.profileDisplayName(m.selectedProfile()) + "\n")
 		for i, action := range m.actions() {
 			prefix := "  "
 			if i == m.actionIndex {
@@ -192,7 +196,7 @@ func (m listMenu) render() string {
 			if i == m.index {
 				prefix = "> "
 			}
-			out.WriteString(prefix + m.displayProfile(profile) + "\n")
+			out.WriteString(prefix + m.profileDisplayName(profile) + "\n")
 		}
 	}
 
@@ -204,12 +208,8 @@ func (m listMenu) orderedProfiles() []string {
 	return prioritizeCurrentProfile(m.profiles, m.currentName)
 }
 
-func (m listMenu) displayProfile(name string) string {
-	if name == m.currentName {
-		return name + "（当前）"
-	}
-
-	return name
+func (m listMenu) profileDisplayName(name string) string {
+	return profileListDisplayName(name, m.descriptions[name], name == m.currentName)
 }
 
 func prioritizeCurrentProfile(names []string, current string) []string {
