@@ -165,7 +165,10 @@ func (m listMenu) render() string {
 
 	switch m.mode {
 	case listMenuModeDeleteConfirm:
+		out.WriteString("删除配置\n")
 		out.WriteString("确认删除：" + m.profileDisplayName(m.selectedProfile()) + "\n")
+		out.WriteString("目标配置：" + m.profileDisplayName(m.selectedProfile()) + "\n")
+		out.WriteString("此操作不可恢复，请再次确认。\n\n")
 		for i, action := range listMenuConfirmActions {
 			prefix := "  "
 			if i == m.confirmIndex {
@@ -174,7 +177,10 @@ func (m listMenu) render() string {
 			out.WriteString(prefix + string(action) + "\n")
 		}
 	case listMenuModeActions:
+		out.WriteString("配置操作\n")
 		out.WriteString("操作：" + m.profileDisplayName(m.selectedProfile()) + "\n")
+		out.WriteString("目标配置：" + m.profileDisplayName(m.selectedProfile()) + "\n\n")
+		out.WriteString("可执行操作：\n")
 		for i, action := range m.actions() {
 			prefix := "  "
 			if i == m.actionIndex {
@@ -186,11 +192,16 @@ func (m listMenu) render() string {
 		profiles := m.orderedProfiles()
 		if len(profiles) == 0 {
 			out.WriteString("配置列表为空\n")
+			out.WriteString("还没有可用的配置。\n")
 			out.WriteString(interactiveQuitHint + "\n")
 			return out.String()
 		}
 
 		out.WriteString("配置列表：\n")
+		if m.currentName != "" {
+			out.WriteString("当前配置：" + m.profileDisplayName(m.currentName) + "\n\n")
+		}
+		out.WriteString("选择配置：\n")
 		for i, profile := range profiles {
 			prefix := "  "
 			if i == m.index {
@@ -200,8 +211,30 @@ func (m listMenu) render() string {
 		}
 	}
 
-	out.WriteString(interactiveQuitHint + "\n")
+	out.WriteString("\n" + m.shortcutHint() + "\n")
 	return out.String()
+}
+
+func (m listMenu) shortcutHint() string {
+	removeHint := m.removeHintLabel()
+
+	switch m.mode {
+	case listMenuModeDeleteConfirm:
+		return "↑/↓ 选择  Enter 确认  " + interactiveQuitHint
+	case listMenuModeActions:
+		return "↑/↓ 选择  Enter 确认  e 编辑  r 重命名  " + removeHint + "  " + interactiveQuitHint
+	default:
+		return "↑/↓ 选择  Enter 操作  e 编辑  r 重命名  " + removeHint + "  " + interactiveQuitHint
+	}
+}
+
+func (m listMenu) removeHintLabel() string {
+	selected := m.selectedProfile()
+	if selected != "" && selected == m.currentName {
+		return "d 当前不可用"
+	}
+
+	return "d 删除"
 }
 
 func (m listMenu) orderedProfiles() []string {

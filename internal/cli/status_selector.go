@@ -56,6 +56,7 @@ func (s statusSelector) render() string {
 		model = "-"
 	}
 
+	out.WriteString("状态总览\n")
 	out.WriteString("当前配置：" + profileDisplayName(s.currentName, s.currentDescription) + "\n")
 	out.WriteString("接口地址：" + s.baseURL + "\n")
 	out.WriteString("模型：" + model + "\n")
@@ -65,7 +66,8 @@ func (s statusSelector) render() string {
 		return out.String()
 	}
 
-	out.WriteString("可用配置：\n")
+	out.WriteString("\n可用配置：\n")
+	out.WriteString("选择配置：\n")
 	for i, name := range names {
 		prefix := "  "
 		if i == s.index {
@@ -74,7 +76,7 @@ func (s statusSelector) render() string {
 		out.WriteString(prefix + s.displayName(name) + "\n")
 	}
 
-	out.WriteString(interactiveQuitHint + "\n")
+	out.WriteString("↑/↓ 选择  Enter 切换  " + interactiveQuitHint + "\n")
 	return out.String()
 }
 

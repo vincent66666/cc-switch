@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"strings"
 	"testing"
 )
@@ -19,10 +20,15 @@ func TestListMenuRenderList(t *testing.T) {
 	rendered := menu.render()
 
 	for _, fragment := range []string{
-		"配置列表：",
+		"配置列表",
+		"当前配置：demo（当前） - 正式环境",
+		"选择配置：",
 		"> demo（当前） - 正式环境",
 		"  beta - 测试环境",
 		"  prod",
+		"↑/↓ 选择  Enter 操作",
+		"d 当前不可用",
+		interactiveQuitHint,
 	} {
 		if !strings.Contains(rendered, fragment) {
 			t.Fatalf("expected list render to contain %q, got %q", fragment, rendered)
@@ -44,8 +50,10 @@ func TestListMenuRenderKeepsCurrentMarkerWhenSelectionMoves(t *testing.T) {
 	rendered := menu.render()
 
 	for _, fragment := range []string{
+		"当前配置：demo（当前） - 正式环境",
 		"  demo（当前） - 正式环境",
 		"> beta - 测试环境",
+		"d 删除",
 	} {
 		if !strings.Contains(rendered, fragment) {
 			t.Fatalf("expected list render to contain %q, got %q", fragment, rendered)
@@ -69,12 +77,15 @@ func TestListMenuEnterActionsAndBack(t *testing.T) {
 
 	rendered := menu.render()
 	for _, fragment := range []string{
-		"操作：beta - 测试环境",
+		"配置操作",
+		"目标配置：beta - 测试环境",
+		"可执行操作：",
 		"> 切换",
 		"  修改",
 		"  重命名",
 		"  删除",
 		"  返回",
+		"Enter 确认",
 	} {
 		if !strings.Contains(rendered, fragment) {
 			t.Fatalf("expected actions render to contain %q, got %q", fragment, rendered)
@@ -100,13 +111,13 @@ func TestListMenuCurrentProfileActionsHideRemove(t *testing.T) {
 	menu.enterActions()
 	rendered := menu.render()
 
-	if !strings.Contains(rendered, "操作：demo（当前） - 正式环境") {
+	if !strings.Contains(rendered, "目标配置：demo（当前） - 正式环境") {
 		t.Fatalf("expected current profile action header, got %q", rendered)
 	}
 	if !strings.Contains(rendered, "重命名") {
 		t.Fatalf("expected current profile actions to include rename, got %q", rendered)
 	}
-	if strings.Contains(rendered, "删除") {
+	if strings.Contains(rendered, "\n  删除\n") {
 		t.Fatalf("expected current profile actions to hide remove, got %q", rendered)
 	}
 }
@@ -137,7 +148,7 @@ func TestListMenuCurrentProfileActionsStayFilteredAfterSelectionChanges(t *testi
 	menu.moveUp()
 	menu.enterActions()
 	rendered := menu.render()
-	if strings.Contains(rendered, "删除") {
+	if strings.Contains(rendered, "\n  删除\n") {
 		t.Fatalf("expected current profile actions to remain filtered after selection change, got %q", rendered)
 	}
 	menu.moveDown()
@@ -206,9 +217,12 @@ func TestListMenuEnterDeleteConfirmAndCancel(t *testing.T) {
 
 	rendered := menu.render()
 	for _, fragment := range []string{
-		"确认删除：beta - 测试环境",
+		"删除配置",
+		"目标配置：beta - 测试环境",
+		"此操作不可恢复，请再次确认。",
 		"> 确认删除",
 		"  取消",
+		"Enter 确认",
 	} {
 		if !strings.Contains(rendered, fragment) {
 			t.Fatalf("expected delete confirm render to contain %q, got %q", fragment, rendered)
@@ -223,5 +237,28 @@ func TestListMenuEnterDeleteConfirmAndCancel(t *testing.T) {
 	menu.backToActions()
 	if menu.mode != listMenuModeActions {
 		t.Fatalf("expected actions mode after back, got %v", menu.mode)
+	}
+}
+
+func TestReadSelectorActionSupportsDirectListShortcuts(t *testing.T) {
+	cases := map[string]selectorAction{
+		"e": selectorActionEdit,
+		"E": selectorActionEdit,
+		"r": selectorActionRename,
+		"R": selectorActionRename,
+		"d": selectorActionRemove,
+		"D": selectorActionRemove,
+	}
+
+	for input, want := range cases {
+		reader := bufio.NewReader(strings.NewReader(input))
+
+		got, err := readSelectorAction(reader)
+		if err != nil {
+			t.Fatalf("expected no error for %q, got %v", input, err)
+		}
+		if got != want {
+			t.Fatalf("expected action %v for %q, got %v", want, input, got)
+		}
 	}
 }
