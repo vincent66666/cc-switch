@@ -21,6 +21,21 @@ type Paths struct {
 	Settings string
 }
 
+type selectorAction int
+
+const (
+	selectorActionUp selectorAction = iota
+	selectorActionDown
+	selectorActionEnter
+	selectorActionQuit
+)
+
+const (
+	clearScreenSequence      = "\x1b[H\x1b[2J"
+	enterAlternateScreenMode = "\x1b[?1049h"
+	exitAlternateScreenMode  = "\x1b[?1049l"
+)
+
 var (
 	promptReader      io.Reader = os.Stdin
 	promptWriter      io.Writer = os.Stdout
@@ -32,7 +47,26 @@ var (
 
 		return stat.Mode()&os.ModeCharDevice != 0
 	}
+	startInteractiveSession = startInteractiveTerminalSession
 )
+
+func selectorInteractive(stdout io.Writer) bool {
+	if !promptInteractive() || !rawTerminalSupported() {
+		return false
+	}
+
+	file, ok := stdout.(*os.File)
+	if !ok {
+		return false
+	}
+
+	stat, err := file.Stat()
+	if err != nil {
+		return false
+	}
+
+	return stat.Mode()&os.ModeCharDevice != 0
+}
 
 func Run(args []string, stdout, stderr io.Writer) int {
 	command := Parse(args)
@@ -102,6 +136,10 @@ func runList(paths Paths, stdout, stderr io.Writer) int {
 	}
 
 	names := profileNames(data.Profiles)
+	if selectorInteractive(stdout) && len(names) > 0 {
+		return runInteractiveList(paths, listMenu{profiles: names, currentName: data.Current}, stdout, stderr)
+	}
+
 	return output.RenderList(stdout, names)
 }
 
@@ -118,7 +156,18 @@ func runStatus(paths Paths, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	return output.RenderStatus(stdout, data.Current, currentProfile, availableNames(data.Profiles, data.Current))
+	names := availableNames(data.Profiles, data.Current)
+	if selectorInteractive(stdout) && len(names) > 0 {
+		selector := statusSelector{
+			currentName: data.Current,
+			baseURL:     currentProfile.Env[profile.EnvBaseURL],
+			model:       currentProfile.Env["ANTHROPIC_MODEL"],
+			names:       names,
+		}
+		return runInteractiveStatus(paths, selector, stdout, stderr)
+	}
+
+	return output.RenderStatus(stdout, data.Current, currentProfile, names)
 }
 
 func runUse(paths Paths, args []string, stdout, stderr io.Writer) int {
@@ -127,7 +176,10 @@ func runUse(paths Paths, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	target := args[0]
+	return switchProfile(paths, args[0], stdout, stderr)
+}
+
+func switchProfile(paths Paths, target string, stdout, stderr io.Writer) int {
 
 	data, err := profile.Load(paths.Profiles)
 	if err != nil {
@@ -158,6 +210,242 @@ func runUse(paths Paths, args []string, stdout, stderr io.Writer) int {
 
 	_, _ = fmt.Fprintf(stdout, "已切换到配置：%s\n", target)
 	return 0
+}
+
+func runInteractiveStatus(paths Paths, selector statusSelector, stdout, stderr io.Writer) int {
+	stdinFile, ok := promptReader.(*os.File)
+	if !ok {
+		_, _ = io.WriteString(stdout, selector.render())
+		return 0
+	}
+
+	closeInteractive, err := startInteractiveSession(stdinFile, stdout)
+	if err != nil {
+		_, _ = io.WriteString(stdout, selector.render())
+		return 0
+	}
+	defer closeInteractive()
+
+	reader := bufio.NewReader(promptReader)
+	for {
+		_, _ = io.WriteString(stdout, clearScreenSequence)
+		_, _ = io.WriteString(stdout, selector.render())
+
+		action, err := readSelectorAction(reader)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return 0
+			}
+			_, _ = fmt.Fprintf(stderr, "读取交互输入失败：%v\n", err)
+			return 1
+		}
+
+		switch action {
+		case selectorActionUp:
+			selector.moveUp()
+		case selectorActionDown:
+			selector.moveDown()
+		case selectorActionEnter:
+			closeInteractive()
+			return switchProfile(paths, selector.selectedName(), stdout, stderr)
+		case selectorActionQuit:
+			return 0
+		}
+	}
+}
+
+func runInteractiveList(paths Paths, menu listMenu, stdout, stderr io.Writer) int {
+	stdinFile, ok := promptReader.(*os.File)
+	if !ok {
+		_, _ = io.WriteString(stdout, menu.render())
+		return 0
+	}
+
+	closeInteractive, err := startInteractiveSession(stdinFile, stdout)
+	if err != nil {
+		_, _ = io.WriteString(stdout, menu.render())
+		return 0
+	}
+	defer func() {
+		if closeInteractive != nil {
+			closeInteractive()
+		}
+	}()
+
+	reader := bufio.NewReader(promptReader)
+	for {
+		_, _ = io.WriteString(stdout, clearScreenSequence)
+		_, _ = io.WriteString(stdout, menu.render())
+
+		action, err := readSelectorAction(reader)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return 0
+			}
+			_, _ = fmt.Fprintf(stderr, "读取交互输入失败：%v\n", err)
+			return 1
+		}
+
+		switch action {
+		case selectorActionUp:
+			menu.moveUp()
+		case selectorActionDown:
+			menu.moveDown()
+		case selectorActionEnter:
+			if menu.mode == listMenuModeProfiles {
+				menu.enterActions()
+				continue
+			}
+
+			switch menu.mode {
+			case listMenuModeActions:
+				switch menu.selectedAction() {
+				case listMenuActionSwitch:
+					closeInteractive()
+					return switchProfile(paths, menu.selectedProfile(), stdout, stderr)
+				case listMenuActionEdit:
+					if closeInteractive != nil {
+						closeInteractive()
+					}
+
+					exitCode := runEditWithPromptReader(paths, []string{menu.selectedProfile()}, reader, stdout, stderr)
+					if exitCode != 0 {
+						return exitCode
+					}
+
+					closeInteractive, err = startInteractiveSession(stdinFile, stdout)
+					if err != nil {
+						return 1
+					}
+					menu, err = reloadListMenu(paths, menu.selectedProfile(), menu.index)
+					if err != nil {
+						_, _ = fmt.Fprintf(stderr, "加载配置失败：%v\n", err)
+						return 1
+					}
+				case listMenuActionRemove:
+					menu.enterDeleteConfirm()
+				case listMenuActionBack:
+					menu.backToList()
+				}
+			case listMenuModeDeleteConfirm:
+				switch menu.selectedConfirmAction() {
+				case listMenuConfirmDelete:
+					selectedName := menu.selectedProfile()
+					selectedIndex := menu.index
+
+					if closeInteractive != nil {
+						closeInteractive()
+					}
+
+					exitCode := runRemove(paths, []string{selectedName}, stdout, stderr)
+					if exitCode != 0 {
+						return exitCode
+					}
+
+					closeInteractive, err = startInteractiveSession(stdinFile, stdout)
+					if err != nil {
+						return 1
+					}
+					menu, err = reloadListMenu(paths, "", selectedIndex)
+					if err != nil {
+						_, _ = fmt.Fprintf(stderr, "加载配置失败：%v\n", err)
+						return 1
+					}
+				case listMenuConfirmCancel:
+					menu.backToActions()
+				}
+			}
+		case selectorActionQuit:
+			return 0
+		}
+	}
+}
+
+func startInteractiveTerminalSession(stdinFile *os.File, stdout io.Writer) (func(), error) {
+	restore, err := makeRawTerminal(stdinFile)
+	if err != nil {
+		return nil, err
+	}
+
+	_, _ = io.WriteString(stdout, enterAlternateScreenMode)
+
+	active := true
+	return func() {
+		if !active {
+			return
+		}
+		active = false
+		restore()
+		_, _ = io.WriteString(stdout, exitAlternateScreenMode)
+	}, nil
+}
+
+func reloadListMenu(paths Paths, selectedName string, selectedIndex int) (listMenu, error) {
+	data, err := profile.Load(paths.Profiles)
+	if err != nil {
+		return listMenu{}, err
+	}
+
+	menu := listMenu{
+		profiles:    profileNames(data.Profiles),
+		currentName: data.Current,
+	}
+
+	if selectedName != "" {
+		for i, name := range menu.profiles {
+			if name == selectedName {
+				menu.index = i
+				return menu, nil
+			}
+		}
+	}
+
+	if selectedIndex >= len(menu.profiles) {
+		selectedIndex = len(menu.profiles) - 1
+	}
+	if selectedIndex < 0 {
+		selectedIndex = 0
+	}
+	menu.index = selectedIndex
+	return menu, nil
+}
+
+func readSelectorAction(reader *bufio.Reader) (selectorAction, error) {
+	for {
+		key, err := reader.ReadByte()
+		if err != nil {
+			return selectorActionQuit, err
+		}
+
+		switch key {
+		case 0x03:
+			return selectorActionQuit, nil
+		case 'q', 'Q':
+			return selectorActionQuit, nil
+		case '\r', '\n':
+			return selectorActionEnter, nil
+		case 0x1b:
+			next, err := reader.ReadByte()
+			if err != nil {
+				return selectorActionQuit, err
+			}
+			if next != '[' {
+				continue
+			}
+
+			arrow, err := reader.ReadByte()
+			if err != nil {
+				return selectorActionQuit, err
+			}
+
+			switch arrow {
+			case 'A':
+				return selectorActionUp, nil
+			case 'B':
+				return selectorActionDown, nil
+			}
+		}
+	}
 }
 
 func profileNames(profiles map[string]profile.Profile) []string {
@@ -258,6 +546,15 @@ func runAdd(paths Paths, args []string, stdout, stderr io.Writer) int {
 }
 
 func runEdit(paths Paths, args []string, stdout, stderr io.Writer) int {
+	var promptSession *bufio.Reader
+	if promptInteractive() {
+		promptSession = bufio.NewReader(promptReader)
+	}
+
+	return runEditWithPromptReader(paths, args, promptSession, stdout, stderr)
+}
+
+func runEditWithPromptReader(paths Paths, args []string, promptSession *bufio.Reader, stdout, stderr io.Writer) int {
 	name, input, err := parseProfileFlags(args, true)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "%s\n", formatCLIError(err))
@@ -280,7 +577,7 @@ func runEdit(paths Paths, args []string, stdout, stderr io.Writer) int {
 		existing.Description = input.description
 	}
 	if promptInteractive() {
-		existing, err = promptEditFields(existing, input)
+		existing, err = promptEditFields(promptSession, existing, input)
 		if err != nil {
 			_, _ = fmt.Fprintf(stderr, "%s\n", formatCLIError(err))
 			return 1
@@ -415,8 +712,11 @@ func promptAddFields(reader *bufio.Reader, input profileFlags) (profileFlags, er
 	return input, nil
 }
 
-func promptEditFields(existing profile.Profile, input profileFlags) (profile.Profile, error) {
-	reader := bufio.NewReader(promptReader)
+func promptEditFields(reader *bufio.Reader, existing profile.Profile, input profileFlags) (profile.Profile, error) {
+	if reader == nil {
+		reader = bufio.NewReader(promptReader)
+	}
+
 	var err error
 	if input.description == "" {
 		var keepCurrent bool

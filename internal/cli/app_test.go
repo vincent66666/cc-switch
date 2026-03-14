@@ -1179,6 +1179,434 @@ func TestRun_ImportCommandIsUnknown(t *testing.T) {
 	}
 }
 
+func TestRun_StatusInteractiveArrowSelectionSwitchesProfile(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+					"ANTHROPIC_MODEL":    "glm-5",
+				},
+			},
+			"prod": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-prod",
+					profile.EnvBaseURL:   "https://prod.example.com",
+				},
+			},
+		},
+	})
+	settingsPath := writeSettingsFixture(t, `{"env":{"ANTHROPIC_AUTH_TOKEN":"old-token"}}`)
+
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, nil, "\x1b[B\r", map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+		"CC_SWITCH_SETTINGS_PATH": settingsPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected interactive status switch to succeed, output=%q", output)
+	}
+
+	if !strings.Contains(output, "可用配置：") || !strings.Contains(output, "> prod") {
+		t.Fatalf("expected interactive selector output, got %q", output)
+	}
+	if !strings.Contains(output, "已切换到配置：prod") {
+		t.Fatalf("expected switch success output, got %q", output)
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after interactive status switch: %v", err)
+	}
+	if savedProfiles.Current != "prod" {
+		t.Fatalf("expected current profile to switch to prod, got %q", savedProfiles.Current)
+	}
+}
+
+func TestRun_StatusInteractiveQuitLeavesCurrentUnchanged(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+		},
+	})
+
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, nil, "q", map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected interactive status quit to succeed, output=%q", output)
+	}
+
+	if !strings.Contains(output, "可用配置：") {
+		t.Fatalf("expected interactive selector output, got %q", output)
+	}
+	if strings.Contains(output, "已切换到配置：") {
+		t.Fatalf("expected quit to avoid switching, got %q", output)
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after interactive quit: %v", err)
+	}
+	if savedProfiles.Current != "demo" {
+		t.Fatalf("expected current profile to remain demo, got %q", savedProfiles.Current)
+	}
+}
+
+func TestRun_StatusInteractiveUsesAlternateScreen(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+		},
+	})
+
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, nil, "q", map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected interactive status alt-screen flow to succeed, output=%q", output)
+	}
+
+	if !strings.Contains(output, "\x1b[?1049h") || !strings.Contains(output, "\x1b[?1049l") {
+		t.Fatalf("expected interactive status to enter and leave alternate screen, got %q", output)
+	}
+}
+
+func TestRun_StatusInteractiveAlternateScreenWrapsMultipleMoves(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+			"prod": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-prod",
+					profile.EnvBaseURL:   "https://prod.example.com",
+				},
+			},
+		},
+	})
+
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, nil, "\x1b[B\x1b[Aq", map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected multi-move status flow to succeed, output=%q", output)
+	}
+
+	if got := strings.Count(output, enterAlternateScreenMode); got != 1 {
+		t.Fatalf("expected one alternate-screen enter sequence, got %d in %q", got, output)
+	}
+	if got := strings.Count(output, exitAlternateScreenMode); got != 1 {
+		t.Fatalf("expected one alternate-screen exit sequence, got %d in %q", got, output)
+	}
+}
+
+func TestRun_StatusInteractiveCtrlCLeavesCurrentUnchanged(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+		},
+	})
+
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, nil, "\x03", map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected interactive status Ctrl+C to exit cleanly, output=%q", output)
+	}
+
+	if !strings.Contains(output, "可用配置：") {
+		t.Fatalf("expected interactive selector output, got %q", output)
+	}
+	if strings.Contains(output, "^C") || strings.Contains(strings.ToLower(output), "interrupt") {
+		t.Fatalf("expected Ctrl+C to be handled as a clean exit, got %q", output)
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after interactive Ctrl+C: %v", err)
+	}
+	if savedProfiles.Current != "demo" {
+		t.Fatalf("expected current profile to remain demo, got %q", savedProfiles.Current)
+	}
+}
+
+func TestRun_StatusInteractiveWithoutAlternativesPrintsStatusOnly(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+					"ANTHROPIC_MODEL":    "glm-5",
+				},
+			},
+		},
+	})
+
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, nil, "", map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected status-only TTY run to succeed, output=%q", output)
+	}
+
+	if !strings.Contains(output, "当前配置：demo") || !strings.Contains(output, "模型：glm-5") {
+		t.Fatalf("expected status output, got %q", output)
+	}
+	if strings.Contains(output, "可用配置：") {
+		t.Fatalf("expected no selector list when there are no alternatives, got %q", output)
+	}
+}
+
+func TestRun_StatusInteractiveEOFClosesAlternateScreen(t *testing.T) {
+	readerFile, err := os.CreateTemp(t.TempDir(), "stdin-*")
+	if err != nil {
+		t.Fatalf("create temp input file: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = readerFile.Close()
+	})
+
+	oldPromptReader := promptReader
+	oldStartInteractiveSession := startInteractiveSession
+	t.Cleanup(func() {
+		promptReader = oldPromptReader
+		startInteractiveSession = oldStartInteractiveSession
+	})
+	promptReader = readerFile
+	startInteractiveSession = func(_ *os.File, stdout io.Writer) (func(), error) {
+		_, _ = io.WriteString(stdout, enterAlternateScreenMode)
+		active := true
+		return func() {
+			if !active {
+				return
+			}
+			active = false
+			_, _ = io.WriteString(stdout, exitAlternateScreenMode)
+		}, nil
+	}
+
+	selector := statusSelector{
+		currentName: "demo",
+		baseURL:     "https://demo.example.com",
+		model:       "glm-5",
+		names:       []string{"beta"},
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runInteractiveStatus(Paths{}, selector, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected interactive status EOF flow to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	if got := strings.Count(stdout.String(), enterAlternateScreenMode); got != 1 {
+		t.Fatalf("expected one alternate-screen enter on EOF exit, got %d in %q", got, stdout.String())
+	}
+	if got := strings.Count(stdout.String(), exitAlternateScreenMode); got != 1 {
+		t.Fatalf("expected one alternate-screen exit on EOF exit, got %d in %q", got, stdout.String())
+	}
+}
+
+func TestRun_StatusFallsBackToPlainTextWhenStdoutIsNotTTY(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+					"ANTHROPIC_MODEL":    "glm-5",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+	withPromptSession(t, "")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run(nil, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected status fallback to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	want := "当前配置：demo\n接口地址：https://demo.example.com\n模型：glm-5\n可用配置：beta\n"
+	if got := stdout.String(); got != want {
+		t.Fatalf("expected plain-text status output %q, got %q", want, got)
+	}
+}
+
+func TestRun_StatusFallsBackToPlainTextWhenRawTerminalUnavailable(t *testing.T) {
+	readerFile, err := os.CreateTemp(t.TempDir(), "stdin-*")
+	if err != nil {
+		t.Fatalf("create temp input file: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = readerFile.Close()
+	})
+
+	oldPromptReader := promptReader
+	t.Cleanup(func() {
+		promptReader = oldPromptReader
+	})
+	promptReader = readerFile
+
+	selector := statusSelector{
+		currentName: "demo",
+		baseURL:     "https://demo.example.com",
+		model:       "glm-5",
+		names:       []string{"beta"},
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runInteractiveStatus(Paths{}, selector, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected raw-terminal fallback to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	want := selector.render()
+	if got := stdout.String(); got != want {
+		t.Fatalf("expected plain selector render on raw-terminal failure, got %q", got)
+	}
+	if strings.Contains(stdout.String(), enterAlternateScreenMode) || strings.Contains(stdout.String(), exitAlternateScreenMode) {
+		t.Fatalf("expected no alternate-screen sequences on raw-terminal fallback, got %q", stdout.String())
+	}
+}
+
+func TestRun_StatusFallsBackToPlainTextWhenStdoutIsTTYAndStdinIsFile(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+					"ANTHROPIC_MODEL":    "glm-5",
+				},
+			},
+		},
+	})
+
+	exitCode, output := runWithTTYStdoutAndFileStdin(t, scriptPath, nil, "", map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected tty-stdout/file-stdin status fallback to succeed, output=%q", output)
+	}
+
+	want := "当前配置：demo\r\n接口地址：https://demo.example.com\r\n模型：glm-5\r\n可用配置：beta\r\n"
+	if output != want {
+		t.Fatalf("expected plain-text tty-stdout/file-stdin status output %q, got %q", want, output)
+	}
+	if strings.Contains(output, clearScreenSequence) || strings.Contains(output, enterAlternateScreenMode) {
+		t.Fatalf("expected no interactive control sequences in tty-stdout/file-stdin status output, got %q", output)
+	}
+}
+
+func TestStatusSelectorRenderIncludesQuitHint(t *testing.T) {
+	selector := statusSelector{
+		currentName: "demo",
+		baseURL:     "https://demo.example.com",
+		model:       "glm-5",
+		names:       []string{"beta"},
+	}
+
+	rendered := selector.render()
+
+	if !strings.Contains(rendered, "按 q 或 Ctrl+C 退出") {
+		t.Fatalf("expected status selector to include quit hint, got %q", rendered)
+	}
+}
+
 func TestRun_CurrentPrintsCurrentProfile(t *testing.T) {
 	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
 		Version: 1,
@@ -1242,6 +1670,704 @@ func TestRun_ListPrintsProfiles(t *testing.T) {
 
 	if got := stdout.String(); got != "beta\ndemo\n" {
 		t.Fatalf("expected sorted profile list, got %q", got)
+	}
+}
+
+func TestRun_ListFallsBackToPlainTextWhenStdoutIsNotTTY(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+	withPromptSession(t, "")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"list"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected list fallback to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	if got := stdout.String(); got != "beta\ndemo\n" {
+		t.Fatalf("expected plain-text list output, got %q", got)
+	}
+}
+
+func TestRun_ListFallsBackToPlainTextWhenStdinIsNotTTY(t *testing.T) {
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+		},
+	})
+
+	t.Setenv("CC_SWITCH_PROFILES_PATH", profilesPath)
+
+	oldPromptInteractive := promptInteractive
+	t.Cleanup(func() {
+		promptInteractive = oldPromptInteractive
+	})
+	promptInteractive = func() bool { return false }
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"list"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected stdin non-tty fallback to succeed, got %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	if got := stdout.String(); got != "beta\ndemo\n" {
+		t.Fatalf("expected plain-text list output when stdin is not tty, got %q", got)
+	}
+	if strings.Contains(stdout.String(), clearScreenSequence) || strings.Contains(stdout.String(), enterAlternateScreenMode) {
+		t.Fatalf("expected no interactive control sequences when stdin is not tty, got %q", stdout.String())
+	}
+}
+
+func TestRun_ListFallsBackToPlainTextWhenStdoutIsTTYAndStdinIsFile(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Profiles: map[string]profile.Profile{
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+		},
+	})
+
+	exitCode, output := runWithTTYStdoutAndFileStdin(t, scriptPath, []string{"list"}, "", map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected tty-stdout/file-stdin list fallback to succeed, output=%q", output)
+	}
+
+	want := "beta\r\ndemo\r\n"
+	if output != want {
+		t.Fatalf("expected plain-text tty-stdout/file-stdin list output %q, got %q", want, output)
+	}
+	if strings.Contains(output, clearScreenSequence) || strings.Contains(output, enterAlternateScreenMode) {
+		t.Fatalf("expected no interactive control sequences in tty-stdout/file-stdin list output, got %q", output)
+	}
+}
+
+func TestListMenuRenderIncludesQuitHintInAllModes(t *testing.T) {
+	cases := []struct {
+		name string
+		menu listMenu
+	}{
+		{
+			name: "profiles",
+			menu: listMenu{
+				profiles: []string{"beta", "demo"},
+			},
+		},
+		{
+			name: "actions",
+			menu: listMenu{
+				profiles: []string{"beta", "demo"},
+				mode:     listMenuModeActions,
+			},
+		},
+		{
+			name: "delete-confirm",
+			menu: listMenu{
+				profiles: []string{"beta", "demo"},
+				mode:     listMenuModeDeleteConfirm,
+			},
+		},
+		{
+			name: "empty",
+			menu: listMenu{},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rendered := tc.menu.render()
+			if !strings.Contains(rendered, "按 q 或 Ctrl+C 退出") {
+				t.Fatalf("expected list menu mode %s to include quit hint, got %q", tc.name, rendered)
+			}
+		})
+	}
+}
+
+func TestRun_ListInteractiveSwitchesSelectedProfile(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+			"prod": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-prod",
+					profile.EnvBaseURL:   "https://prod.example.com",
+				},
+			},
+		},
+	})
+	settingsPath := writeSettingsFixture(t, `{"env":{"ANTHROPIC_AUTH_TOKEN":"old-token"}}`)
+
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, "\x1b[B\x1b[B\r\r", map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+		"CC_SWITCH_SETTINGS_PATH": settingsPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected interactive list switch to succeed, output=%q", output)
+	}
+
+	if !strings.Contains(output, "配置列表：") || !strings.Contains(output, "操作：prod") {
+		t.Fatalf("expected list and action menu output, got %q", output)
+	}
+	if !strings.Contains(output, "已切换到配置：prod") {
+		t.Fatalf("expected switch success output, got %q", output)
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after interactive list switch: %v", err)
+	}
+	if savedProfiles.Current != "prod" {
+		t.Fatalf("expected current profile to switch to prod, got %q", savedProfiles.Current)
+	}
+}
+
+func TestRun_ListInteractiveBackLeavesCurrentUnchanged(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+		},
+	})
+
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, "\r\x1b[B\x1b[B\x1b[B\rq", map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected interactive list back flow to succeed, output=%q", output)
+	}
+
+	if !strings.Contains(output, "操作：beta") {
+		t.Fatalf("expected action menu output, got %q", output)
+	}
+	if strings.Contains(output, "已切换到配置：") {
+		t.Fatalf("expected back flow to avoid switching, got %q", output)
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after interactive list back flow: %v", err)
+	}
+	if savedProfiles.Current != "demo" {
+		t.Fatalf("expected current profile to remain demo, got %q", savedProfiles.Current)
+	}
+}
+
+func TestRun_ListInteractiveUsesAlternateScreen(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+		},
+	})
+
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, "q", map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected interactive list alt-screen flow to succeed, output=%q", output)
+	}
+
+	if !strings.Contains(output, "\x1b[?1049h") || !strings.Contains(output, "\x1b[?1049l") {
+		t.Fatalf("expected interactive list to enter and leave alternate screen, got %q", output)
+	}
+}
+
+func TestRun_ListInteractiveActionMenuQuitClosesAlternateScreen(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+		},
+	})
+
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, "\rq", map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected action-menu quit flow to succeed, output=%q", output)
+	}
+
+	if got := strings.Count(output, enterAlternateScreenMode); got != 1 {
+		t.Fatalf("expected one alternate-screen enter in action-menu quit flow, got %d in %q", got, output)
+	}
+	if got := strings.Count(output, exitAlternateScreenMode); got != 1 {
+		t.Fatalf("expected one alternate-screen exit in action-menu quit flow, got %d in %q", got, output)
+	}
+	if strings.Contains(output, "已切换到配置：") {
+		t.Fatalf("expected action-menu quit to avoid switching, got %q", output)
+	}
+}
+
+func TestRun_ListInteractiveCurrentProfileActionsHideRemove(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+		},
+	})
+
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, "\x1b[B\rq", map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected interactive current-profile action menu to succeed, output=%q", output)
+	}
+
+	if !strings.Contains(output, "操作：demo") {
+		t.Fatalf("expected current-profile action menu output, got %q", output)
+	}
+	if strings.Contains(output, "删除") {
+		t.Fatalf("expected current-profile action menu to hide remove, got %q", output)
+	}
+}
+
+func TestRun_ListInteractiveDeleteConfirmQuitClosesAlternateScreen(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+		},
+	})
+
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, "\r\x1b[B\x1b[B\rq", map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected delete-confirm quit flow to succeed, output=%q", output)
+	}
+
+	if got := strings.Count(output, enterAlternateScreenMode); got != 1 {
+		t.Fatalf("expected one alternate-screen enter in delete-confirm quit flow, got %d in %q", got, output)
+	}
+	if got := strings.Count(output, exitAlternateScreenMode); got != 1 {
+		t.Fatalf("expected one alternate-screen exit in delete-confirm quit flow, got %d in %q", got, output)
+	}
+	if strings.Contains(output, "已删除配置：") {
+		t.Fatalf("expected delete-confirm quit to avoid deleting, got %q", output)
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after delete-confirm quit: %v", err)
+	}
+	if _, exists := savedProfiles.Profiles["beta"]; !exists {
+		t.Fatalf("expected beta to remain after quitting delete confirm, got %#v", savedProfiles.Profiles)
+	}
+}
+
+func TestRun_ListInteractiveCtrlCLeavesCurrentUnchanged(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+		},
+	})
+
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, "\x03", map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected interactive list Ctrl+C to exit cleanly, output=%q", output)
+	}
+
+	if !strings.Contains(output, "配置列表：") {
+		t.Fatalf("expected interactive list output, got %q", output)
+	}
+	if strings.Contains(output, "^C") || strings.Contains(strings.ToLower(output), "interrupt") {
+		t.Fatalf("expected Ctrl+C to be handled as a clean exit, got %q", output)
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after interactive list Ctrl+C: %v", err)
+	}
+	if savedProfiles.Current != "demo" {
+		t.Fatalf("expected current profile to remain demo, got %q", savedProfiles.Current)
+	}
+}
+
+func TestRun_ListInteractiveEditUpdatesProfileAndReturnsToList(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Description: "旧描述",
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+		},
+	})
+
+	input := "\r\x1b[B\r新描述\n\n\n\n\n\n\nq"
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, input, map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected interactive list edit to succeed, output=%q", output)
+	}
+
+	if !strings.Contains(output, "操作：beta") || !strings.Contains(output, "已更新配置：beta") {
+		t.Fatalf("expected edit flow output, got %q", output)
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after interactive list edit: %v", err)
+	}
+	if savedProfiles.Profiles["beta"].Description != "新描述" {
+		t.Fatalf("expected beta description to update, got %#v", savedProfiles.Profiles["beta"])
+	}
+}
+
+func TestRun_ListInteractiveEditReentersAlternateScreenAfterSuccess(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Description: "旧描述",
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+		},
+	})
+
+	input := "\r\x1b[B\r新描述\n\n\n\n\n\n\nq"
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, input, map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected interactive list edit alt-screen flow to succeed, output=%q", output)
+	}
+
+	if got := strings.Count(output, enterAlternateScreenMode); got != 2 {
+		t.Fatalf("expected two alternate-screen enters around edit success flow, got %d in %q", got, output)
+	}
+	if got := strings.Count(output, exitAlternateScreenMode); got != 2 {
+		t.Fatalf("expected two alternate-screen exits around edit success flow, got %d in %q", got, output)
+	}
+	if !strings.Contains(output, "已更新配置：beta") {
+		t.Fatalf("expected edit success output, got %q", output)
+	}
+}
+
+func TestRun_ListInteractiveRemoveConfirmsAndRefreshesList(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+			"prod": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-prod",
+					profile.EnvBaseURL:   "https://prod.example.com",
+				},
+			},
+		},
+	})
+
+	input := "\r\x1b[B\x1b[B\r\rq"
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, input, map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected interactive list remove to succeed, output=%q", output)
+	}
+
+	if !strings.Contains(output, "确认删除：beta") || !strings.Contains(output, "已删除配置：beta") {
+		t.Fatalf("expected delete confirmation flow output, got %q", output)
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after interactive list remove: %v", err)
+	}
+	if _, exists := savedProfiles.Profiles["beta"]; exists {
+		t.Fatalf("expected beta profile to be removed, got %#v", savedProfiles.Profiles)
+	}
+}
+
+func TestRun_ListInteractiveRemoveReentersAlternateScreenAfterSuccess(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Current: "demo",
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+			"demo": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-demo",
+					profile.EnvBaseURL:   "https://demo.example.com",
+				},
+			},
+			"prod": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-prod",
+					profile.EnvBaseURL:   "https://prod.example.com",
+				},
+			},
+		},
+	})
+
+	input := "\r\x1b[B\x1b[B\r\rq"
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, input, map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected interactive list remove alt-screen flow to succeed, output=%q", output)
+	}
+
+	if got := strings.Count(output, enterAlternateScreenMode); got != 2 {
+		t.Fatalf("expected two alternate-screen enters around remove success flow, got %d in %q", got, output)
+	}
+	if got := strings.Count(output, exitAlternateScreenMode); got != 2 {
+		t.Fatalf("expected two alternate-screen exits around remove success flow, got %d in %q", got, output)
+	}
+	if !strings.Contains(output, "已删除配置：beta") {
+		t.Fatalf("expected remove success output, got %q", output)
+	}
+}
+
+func TestRun_ListInteractiveRemoveLastProfileShowsEmptyState(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+		},
+	})
+
+	input := "\r\x1b[B\x1b[B\r\rq"
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, input, map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected interactive list remove-last flow to succeed, output=%q", output)
+	}
+
+	if !strings.Contains(output, "已删除配置：beta") {
+		t.Fatalf("expected delete success output, got %q", output)
+	}
+	if !strings.Contains(output, "配置列表为空") || !strings.Contains(output, interactiveQuitHint) {
+		t.Fatalf("expected empty-state output after deleting last profile, got %q", output)
+	}
+
+	savedProfiles, err := profile.Load(profilesPath)
+	if err != nil {
+		t.Fatalf("load profiles after interactive list remove-last flow: %v", err)
+	}
+	if len(savedProfiles.Profiles) != 0 {
+		t.Fatalf("expected all profiles to be removed, got %#v", savedProfiles.Profiles)
+	}
+}
+
+func TestRun_ListInteractiveEmptyStateQuitClosesAlternateScreen(t *testing.T) {
+	scriptPath := requireScript(t)
+	profilesPath := writeProfilesFixture(t, profile.ProfilesFile{
+		Version: 1,
+		Profiles: map[string]profile.Profile{
+			"beta": {
+				Env: map[string]string{
+					profile.EnvAuthToken: "token-beta",
+					profile.EnvBaseURL:   "https://beta.example.com",
+				},
+			},
+		},
+	})
+
+	exitCode, output := runWithTTYBestEffort(t, scriptPath, []string{"list"}, "\r\x1b[B\x1b[B\r\rq", map[string]string{
+		"CC_SWITCH_PROFILES_PATH": profilesPath,
+	})
+	if exitCode != 0 {
+		t.Fatalf("expected empty-state quit flow to succeed, output=%q", output)
+	}
+
+	if got := strings.Count(output, enterAlternateScreenMode); got != 2 {
+		t.Fatalf("expected two alternate-screen enters around empty-state flow, got %d in %q", got, output)
+	}
+	if got := strings.Count(output, exitAlternateScreenMode); got != 2 {
+		t.Fatalf("expected two alternate-screen exits around empty-state flow, got %d in %q", got, output)
+	}
+	if !strings.Contains(output, "配置列表为空") {
+		t.Fatalf("expected empty-state output, got %q", output)
 	}
 }
 
@@ -1389,6 +2515,100 @@ func runWithTTY(t *testing.T, scriptPath string, args []string, input string, en
 	}
 
 	return exitErr.ExitCode(), output.String()
+}
+
+func runWithTTYBestEffort(t *testing.T, scriptPath string, args []string, input string, env map[string]string) (int, string) {
+	t.Helper()
+
+	cmdArgs := append([]string{"-q", "/dev/null", os.Args[0], "-test.run=^TestTTYHelperProcess$"}, append([]string{"--"}, args...)...)
+	cmd := exec.Command(scriptPath, cmdArgs...)
+	cmd.Env = append(os.Environ(), "GO_WANT_TTY_HELPER=1")
+	for key, value := range env {
+		cmd.Env = append(cmd.Env, key+"="+value)
+	}
+
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start tty command: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	if input != "" {
+		if _, err := io.WriteString(stdin, input); err != nil && !strings.Contains(err.Error(), "broken pipe") {
+			t.Fatalf("write tty input: %v", err)
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	_ = stdin.Close()
+
+	err = cmd.Wait()
+	if err == nil {
+		return 0, output.String()
+	}
+
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("wait tty command: %v", err)
+	}
+
+	return exitErr.ExitCode(), output.String()
+}
+
+func runWithTTYStdoutAndFileStdin(t *testing.T, scriptPath string, args []string, input string, env map[string]string) (int, string) {
+	t.Helper()
+
+	inputPath := filepath.Join(t.TempDir(), "stdin.txt")
+	if err := os.WriteFile(inputPath, []byte(input), 0o644); err != nil {
+		t.Fatalf("write stdin fixture: %v", err)
+	}
+
+	commandArgs := append([]string{shellQuote(os.Args[0]), "-test.run=^TestTTYHelperProcess$", "--"}, quoteShellArgs(args)...)
+	shellCommand := "exec < " + shellQuote(inputPath) + "; " + strings.Join(commandArgs, " ")
+
+	cmd := exec.Command(scriptPath, "-q", "/dev/null", "sh", "-c", shellCommand)
+	cmd.Env = append(os.Environ(), "GO_WANT_TTY_HELPER=1")
+	for key, value := range env {
+		cmd.Env = append(cmd.Env, key+"="+value)
+	}
+
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+
+	if err := cmd.Run(); err == nil {
+		return 0, trimScriptEOFArtifact(output.String())
+	} else {
+		exitErr, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Fatalf("run tty-stdout/file-stdin command: %v", err)
+		}
+		return exitErr.ExitCode(), trimScriptEOFArtifact(output.String())
+	}
+}
+
+func quoteShellArgs(args []string) []string {
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		quoted = append(quoted, shellQuote(arg))
+	}
+	return quoted
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+}
+
+func trimScriptEOFArtifact(output string) string {
+	return strings.TrimPrefix(output, "^D\b\b")
 }
 
 func helperArgs(argv []string) []string {

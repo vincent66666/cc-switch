@@ -97,16 +97,18 @@ cc-switch
 示例输出：
 
 ```text
-current: demo
-base_url: https://example.com
-model: glm-5
-available: beta prod
+当前配置：demo
+接口地址：https://example.com
+模型：glm-5
+可用配置：beta prod
 ```
+
+当前实现里，只有在 macOS/Darwin 上运行，并且 stdin/stdout 都连接到交互终端、同时存在其他可切换的 profile 时，才会显示一个可用 `↑/↓` 选择、按 `Enter` 直接切换、按 `q` 或 `Ctrl+C` 退出的列表。其他平台或非 TTY 场景会继续输出上面的纯文本结果。
 
 如果没有可用 profile，或者当前 profile 不存在，输出会退化为：
 
 ```text
-current: unknown
+当前配置：未知
 ```
 
 ### 2. 查看当前 profile 名称
@@ -127,13 +129,15 @@ demo
 cc-switch list
 ```
 
-输出按名称排序，每行一个：
+非交互输出按名称排序，每行一个：
 
 ```text
 beta
 demo
 prod
 ```
+
+当前实现里，只有在 macOS/Darwin 上运行，并且 stdin/stdout 都连接到交互终端时，`cc-switch list` 才会显示一个可上下选择的列表。按 `Enter` 后会进入 `切换 / 修改 / 删除 / 返回` 菜单，按 `q` 或 `Ctrl+C` 退出。其他平台或非 TTY 场景会保持上面的纯文本输出。
 
 ### 4. 切换 profile
 
@@ -144,7 +148,7 @@ cc-switch use demo
 成功输出：
 
 ```text
-switched to demo
+已切换到配置：demo
 ```
 
 切换时会按下面的顺序执行：
